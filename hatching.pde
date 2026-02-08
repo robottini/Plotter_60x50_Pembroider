@@ -6,8 +6,25 @@
  * @param ic - Indice del colore da utilizzare per le linee di hatching
  * @param distContour - Distanza delle linee di hatching dal bordo della forma
  */
+import processing.embroider.*;
+PEmbroiderGraphics E;
+
+void ensurePE() {
+  if (E == null) {
+    E = new PEmbroiderGraphics(this, width, height);
+    E.beginDraw();
+    E.noStroke();
+  }
+}
+
+RShape rshapeFromPELine(float x1, float y1, float x2, float y2) {
+  ensurePE();
+  E.line(x1, y1, x2, y2);
+  return RShape.createLine(x1, y1, x2, y2);
+}
+
 void intersection(RShape shape, int ic, float distContour) {
-    RPoint[] ps = null; // Variabile dichiarata ma non usata in questo snippet
+    RPoint[] ps = null;
 
   // Ottiene i punti che formano il rettangolo di delimitazione della forma
   RPoint[] sb = shape.getBoundsPoints();
@@ -16,11 +33,10 @@ void intersection(RShape shape, int ic, float distContour) {
   // sb[2] tipicamente è il punto in basso a destra (maxX, maxY)
   // sb[3] tipicamente è il punto in basso a sinistra (minX, maxY)
 
-  // Crea un rettangolo con le dimensioni massime e minime della forma
-  // Nota: L'oggetto Rsb non è strettamente necessario per calcolare l'angolo
-  // della diagonale se usiamo direttamente i punti sb[0] e sb[2],
-  // ma lo manteniamo se dovesse servire per altre parti del codice non mostrate.
-  RShape Rsb = RShape.createRectangle(sb[0].x, sb[0].y, sb[1].x - sb[0].x, sb[2].y - sb[1].y);
+  float minX = sb[0].x;
+  float minY = sb[0].y;
+  float maxX = sb[2].x;
+  float maxY = sb[2].y;
 
   // Determina l'angolo della diagonale del rettangolo di delimitazione.
   // Calcoliamo l'angolo tra l'asse x positivo e il vettore
@@ -29,8 +45,8 @@ void intersection(RShape shape, int ic, float distContour) {
   // La funzione atan2(dy, dx) restituisce l'angolo in radianti.
   // Utilizziamo degrees() per convertirlo in gradi.
 
-  float dx = sb[2].x - sb[0].x; // Differenza in x (larghezza del rettangolo)
-  float dy = sb[2].y - sb[0].y; // Differenza in y (altezza del rettangolo)
+  float dx = maxX - minX;
+  float dy = maxY - minY;
 
   // Calcola l'angolo in radianti
   float angleRadians = atan2(dy, dx);
@@ -38,26 +54,29 @@ void intersection(RShape shape, int ic, float distContour) {
   // Converte l'angolo in gradi
   float angle = degrees(angleRadians)+90*random(0,2);
   // Calcola la diagonale del rettangolo di delimitazione
-  float diag = sqrt(pow(sb[1].x-sb[0].x, 2) + pow(sb[2].y-sb[1].y, 2));
+  float diag = sqrt(pow(maxX-minX, 2) + pow(maxY-minY, 2));
   // Calcola il numero di linee in base alla dimensione della diagonale e allo step
   int num = 2 + int(diag/stepSVG);   //provarapp
   // Lunghezza delle linee di hatching
   int hatchLength = int(stepSVG * (num-1)); //provarapp
  
   // Parte dal centro del rettangolo di delimitazione
-  RPoint sbCenter = Rsb.getCenter();
+  RPoint sbCenter = new RPoint((minX+maxX)/2.0, (minY+maxY)/2.0);
   
   // Crea le linee di hatching
   for (int i = 0; i < num; i++) {
-    // Crea una linea orizzontale e la ruota rispetto al centro
-    RShape iLine = RShape.createLine(
-      sbCenter.x - hatchLength/2, 
-      sbCenter.y - hatchLength/2 + i*stepSVG,  //provarapp 
-      sbCenter.x + hatchLength/2, 
-      sbCenter.y - hatchLength/2 + i*stepSVG   //provarapp
-    );
-    // Ruota la linea in base all'angolo calcolato
-    iLine.rotate(radians(angle), sbCenter);
+    float x1 = sbCenter.x - hatchLength/2;
+    float y1 = sbCenter.y - hatchLength/2 + i*stepSVG;
+    float x2 = sbCenter.x + hatchLength/2;
+    float y2 = sbCenter.y - hatchLength/2 + i*stepSVG;
+    float rad = radians(angle);
+    float cosA = cos(rad);
+    float sinA = sin(rad);
+    float rx1 = cosA*(x1 - sbCenter.x) - sinA*(y1 - sbCenter.y) + sbCenter.x;
+    float ry1 = sinA*(x1 - sbCenter.x) + cosA*(y1 - sbCenter.y) + sbCenter.y;
+    float rx2 = cosA*(x2 - sbCenter.x) - sinA*(y2 - sbCenter.y) + sbCenter.x;
+    float ry2 = sinA*(x2 - sbCenter.x) + cosA*(y2 - sbCenter.y) + sbCenter.y;
+    RShape iLine = rshapeFromPELine(rx1, ry1, rx2, ry2);
     
     // Trova le intersezioni tra la linea e la forma
     ps = shape.getIntersections(iLine);
@@ -87,26 +106,19 @@ void intersection(RShape shape, int ic, float distContour) {
           // Verifica se il punto medio è all'interno della forma
           if (shape.contains(medLinea)) {
             // Crea una linea tra i due punti di intersezione
-            RCommand cLine = new RCommand(p1.x, p1.y, p2.x, p2.y);
-            float lenLine = cLine.getCurveLength();
+            float dxl = p2.x - p1.x;
+            float dyl = p2.y - p1.y;
+            float lenLine = sqrt(dxl*dxl + dyl*dyl);
             
             // Verifica se la linea è abbastanza lunga per essere visualizzata
             if (lenLine > stepSVG+1.0) {  // Controllo reintrodotto come richiesto  provarapp
-              // Calcola la percentuale della linea da ritagliare per rispettare distContour
-               float percSplit=distContour / lenLine;
               RShape hatchLine;
-              
-              if (percSplit < 1) {
-                // Ritaglia la linea per mantenere la distanza dal bordo
-                RCommand[] endLine = cLine.split(1.0 - percSplit);
-                RCommand[] startLine = cLine.split(percSplit);
-                RPoint start = startLine[1].startPoint;
-                RPoint end = endLine[0].endPoint;
-                hatchLine = RShape.createLine(start.x, start.y, end.x, end.y);
-              } else {
-                // La linea è troppo corta per essere ritagliata, usa i punti originali
-                hatchLine = RShape.createLine(p1.x, p1.y, p2.x, p2.y);
-              }
+              float ux = dxl / lenLine;
+              float uy = dyl / lenLine;
+              float inset = min(distContour, lenLine * 0.5);
+              RPoint start = new RPoint(p1.x + ux*inset, p1.y + uy*inset);
+              RPoint end = new RPoint(p2.x - ux*inset, p2.y - uy*inset);
+              hatchLine = rshapeFromPELine(start.x, start.y, end.x, end.y);
               
               // Aggiunge la linea di hatching alla lista delle forme
               formaList.add(new Forma(hatchLine, ic, 1));

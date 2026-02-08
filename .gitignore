@@ -12,3 +12,7 @@ out/
 
 # macOS
 .DS_Store
+
+# GCODE files
+GCODE/
+GCODE\\/
