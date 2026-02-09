@@ -245,10 +245,12 @@ void setup() {
   println("Reduction Factor Height: " + reductionFactorHeight);
 
   //factor=reductionFactorWidth*screenScaleFactor;
-  factor=scaleFactor;
+  //factor=scaleFactor;
+  factor = reductionFactorWidth;
   println("Redction factor paper vs screen:"+factor);
 
-  stepSVG=step * svgScaleFactor;
+  //stepSVG=step * svgScaleFactor;
+  stepSVG = step / factor;
   stepDisplay=step/factor;
   sovr=stepDisplay-0.5;
   print("Step paper:"+step); 
