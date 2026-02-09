@@ -134,17 +134,15 @@ void  orderList() {
       }
 
       // Controllo linee duplicate esatte
-      float tolerance = 0.01;
+      float tolerance = 0.1;
       boolean confrontoEsatto = (dist(prev.start, curr.start) < tolerance &&
                                  dist(prev.end, curr.end) < tolerance &&
-                                 prev.ic == curr.ic &&
-                                 prev.type == curr.type);
+                                 prev.ic == curr.ic);
 
       // Controllo linee sovrapposte inverse
       boolean confrontoInverso = (dist(prev.start, curr.end) < tolerance &&
                                   dist(prev.end, curr.start) < tolerance &&
-                                  prev.ic == curr.ic &&
-                                  prev.type == curr.type);
+                                  prev.ic == curr.ic);
 
       if (confrontoEsatto || confrontoInverso) {
         ordLineaList.remove(j--);
