@@ -25,6 +25,7 @@ RShape rshapeFromPELine(float x1, float y1, float x2, float y2) {
 
 void intersection(RShape shape, int ic, float distContour) {
     RPoint[] ps = null;
+    RPoint lastHatchEnd = null; // Variabile per ottimizzazione percorso (zig-zag)
 
   // Ottiene i punti che formano il rettangolo di delimitazione della forma
   RPoint[] sb = shape.getBoundsPoints();
@@ -118,7 +119,26 @@ void intersection(RShape shape, int ic, float distContour) {
               float inset = min(distContour, lenLine * 0.5);
               RPoint start = new RPoint(p1.x + ux*inset, p1.y + uy*inset);
               RPoint end = new RPoint(p2.x - ux*inset, p2.y - uy*inset);
+              
+              // Ottimizzazione percorso (zig-zag):
+              // Se invertendo la linea riduciamo la distanza dall'ultimo punto disegnato, invertiamola.
+              if (lastHatchEnd != null) {
+                // Calcoliamo la distanza euclidea manualmente per sicurezza
+                float distDirect = dist(lastHatchEnd.x, lastHatchEnd.y, start.x, start.y);
+                float distFlipped = dist(lastHatchEnd.x, lastHatchEnd.y, end.x, end.y);
+                
+                if (distFlipped < distDirect) {
+                  // Swap start/end
+                  RPoint temp = start;
+                  start = end;
+                  end = temp;
+                }
+              }
+              
               hatchLine = rshapeFromPELine(start.x, start.y, end.x, end.y);
+              
+              // Aggiorna l'ultimo punto finale
+              lastHatchEnd = end;
               
               // Aggiunge la linea di hatching alla lista delle forme
               formaList.add(new Forma(hatchLine, ic, 1));

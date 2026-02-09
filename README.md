@@ -9,6 +9,7 @@ Sketch Processing per generare GCode da SVG con hatching su plotter.
 
 ## Ultime modifiche
 
+- **Ottimizzazione Hatching**: Implementato algoritmo "zig-zag" (serpentina) intelligente per le linee di riempimento. Il sistema inverte automaticamente la direzione delle linee quando ciò riduce il percorso a vuoto (pen-up travel), minimizzando i tempi di esecuzione del plotter.
 - **Preview Interattiva**: Aggiunta modalità di visualizzazione passo-passo a fine elaborazione.
   - **Tasto 1**: Avanza di uno step (mostra contorno o singola linea hatching con punti start/end).
   - **Tasto 2**: Torna indietro di uno step.
