@@ -9,6 +9,7 @@ Sketch Processing per generare GCode da SVG con hatching su plotter.
 
 ## Ultime modifiche
 
+- **Ottimizzazione PEmbroider per Plotter**: Configurazione specifica dell'inizializzazione di PEmbroider per l'uso con plotter. Disabilitato il ricampionamento delle linee (`toggleResample(false)`) per mantenere vettori continui ed evitati riempimenti non necessari, migliorando la fluidità e riducendo i dati superflui per il plotting.
 - **Stima Tempi (Russolino 3.0)**: Integrato modulo avanzato (`Time.pde`) per la stima precisa del tempo di esecuzione del GCode. Calcola tempi di movimento, accelerazioni e cambi utensile basandosi sui parametri fisici della macchina (FluidNC).
 - **Ottimizzazione Hatching**: Implementato algoritmo "zig-zag" (serpentina) intelligente per le linee di riempimento. Il sistema inverte automaticamente la direzione delle linee quando ciò riduce il percorso a vuoto (pen-up travel), minimizzando i tempi di esecuzione del plotter.
 - **Preview Interattiva**: Aggiunta modalità di visualizzazione passo-passo a fine elaborazione.

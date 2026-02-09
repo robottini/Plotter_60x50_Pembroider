@@ -13,7 +13,22 @@ void ensurePE() {
   if (E == null) {
     E = new PEmbroiderGraphics(this, width, height);
     E.beginDraw();
-    E.noStroke();
+    
+    // --- CONFIGURAZIONE BASE PER PLOTTER ---
+    // I plotter lavorano con linee (stroke), non con riempimenti (fill) o satin
+    E.noFill(); 
+    E.stroke(0);        // Colore nero per il tratto
+    E.strokeWeight(1);  // Spessore unitario
+    
+    // --- OTTIMIZZAZIONI SPECIFICHE ---
+    // Disabilita il ricampionamento delle linee in piccoli punti (stitch).
+    // I plotter preferiscono linee continue o segmenti lunghi definiti dalla geometria,
+    // evitando di spezzare una linea retta in centinaia di piccoli movimenti.
+    E.toggleResample(false); 
+    
+    // Nota: Per l'export finale, si consiglia di usare E.optimize() prima di salvare,
+    // ma attenzione che può essere lento. Per i plotter, disabilitare jump stitches
+    // e nodi è fondamentale (spesso gestito in fase di export o post-processing).
   }
 }
 
