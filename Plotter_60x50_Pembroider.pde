@@ -1,5 +1,11 @@
 // Viene creato il gcode a partire da una immagine SVG. L'immagine è di 1000x700 pixel 
-// viene creata una classe contenente anche il colore e la tipologia di forma (0=contorno, 1=filling)
+// Caratteristiche principali:
+// - Parsing SVG con Geomerative e gestione primitive con PEmbroider
+// - Hatching ottimizzato con percorso "zig-zag" (serpentina) per minimizzare spostamenti a vuoto
+// - Preview interattiva (tasti 1-4, 9) per visualizzazione passo-passo
+// - Stima tempi di esecuzione GCode (Russolino 3.0)
+// - Scaling preciso (mm carta -> pixel schermo)
+//
 // ogni shape (contorno o fill) viene inserita nella lista
 // viene creata una nuova lista normalizzata alle dimensioni del foglio 
 // crea una lista di sole linee a partire dalle shape
