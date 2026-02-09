@@ -385,10 +385,94 @@ void setup() {
 
 
   println("End of elaboration");
+  
+  // Costruisci i dati per la preview
+  buildPreviewSteps();
 }
 
 
 void draw() {
+}
+
+void keyPressed() {
+  if (key == '1') {
+    // Avanti di uno step (contorno o riga hatch)
+    if (currentPreviewStep < previewSteps.size() - 1) {
+      currentPreviewStep++;
+      disegnaPreview();
+    }
+  } else if (key == '2') {
+    // Indietro di uno step
+    if (currentPreviewStep >= 0) {
+      currentPreviewStep--;
+      disegnaPreview();
+    }
+  } else if (key == '3') {
+    // Avanti di tutta una forma
+    if (currentPreviewStep < previewSteps.size() - 1) {
+      int targetShapeIndex = -1;
+      
+      // Se siamo all'inizio (o step -1), la target shape è la prima (index 0)
+      if (currentPreviewStep == -1) {
+        targetShapeIndex = 0;
+      } else {
+        // Altrimenti, la target shape è la shape successiva a quella attuale
+        // Oppure, se non abbiamo finito la shape attuale, finiamola.
+        int currentShapeIdx = previewSteps.get(currentPreviewStep).shapeIndex;
+        
+        // Cerchiamo l'ultimo step con questo shapeIndex
+        int lastStepOfCurrentShape = currentPreviewStep;
+        for (int i = currentPreviewStep + 1; i < previewSteps.size(); i++) {
+          if (previewSteps.get(i).shapeIndex == currentShapeIdx) {
+            lastStepOfCurrentShape = i;
+          } else {
+            break; 
+          }
+        }
+        
+        if (currentPreviewStep < lastStepOfCurrentShape) {
+          // Se non abbiamo finito la shape corrente, finiamola
+          currentPreviewStep = lastStepOfCurrentShape;
+        } else {
+          // Se abbiamo finito la shape corrente, cerchiamo la fine della prossima
+          int nextShapeIdx = currentShapeIdx + 1;
+          for (int i = currentPreviewStep + 1; i < previewSteps.size(); i++) {
+            if (previewSteps.get(i).shapeIndex == nextShapeIdx) {
+              currentPreviewStep = i;
+            } else if (previewSteps.get(i).shapeIndex > nextShapeIdx) {
+              break;
+            }
+          }
+        }
+      }
+      disegnaPreview();
+    }
+  } else if (key == '4') {
+    // Indietro di tutta una forma (cancella l'ultima forma interamente)
+    if (currentPreviewStep >= 0) {
+      int currentShapeIdx = previewSteps.get(currentPreviewStep).shapeIndex;
+      
+      // Trova il primo step di questa shape
+      int firstStepOfCurrentShape = currentPreviewStep;
+      for (int i = currentPreviewStep; i >= 0; i--) {
+        if (previewSteps.get(i).shapeIndex == currentShapeIdx) {
+          firstStepOfCurrentShape = i;
+        } else {
+          break;
+        }
+      }
+      
+      // Se siamo già all'inizio della shape corrente o a metà, torniamo all'inizio-1 (cioè fine shape precedente)
+      // Il requisito è "cancella l'ultima forma interamente".
+      // Quindi se vedo Shape N (tutta o in parte), voglio tornare a vedere Shape N-1 (tutta).
+      currentPreviewStep = firstStepOfCurrentShape - 1;
+      disegnaPreview();
+    }
+  } else if (key == '9') {
+    // Visualizza tutto
+    currentPreviewStep = previewSteps.size() - 1;
+    disegnaPreview();
+  }
 }
 
 
