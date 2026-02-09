@@ -55,11 +55,28 @@ void creaLista() {
           lineaList.add(new Linea(startS, endS, paperFormList.get(i).ic, paperFormList.get(i).type));
           startS=endS; //la fine della precedente riga è l'inizio della nuova riga
         }
-        lineaList.add(new Linea(endS, sPolygon.contours[k].points[0], paperFormList.get(i).ic, paperFormList.get(i).type)); //chiudi dall'ultimo punto della shape al primo
+        
+        // Chiudi il percorso solo se è un contorno (type 0)
+        // Le linee di hatching (type 1) sono percorsi aperti e non devono essere chiuse (altrimenti si crea una linea doppia di ritorno)
+        if (paperFormList.get(i).type == 0) {
+          lineaList.add(new Linea(endS, sPolygon.contours[k].points[0], paperFormList.get(i).ic, paperFormList.get(i).type)); //chiudi dall'ultimo punto della shape al primo
+        }
         // }
       }
     }
   }
+
+  // Rimuovi immediatamente i micro-segmenti che possono essere generati da artefatti geometrici
+  int removedMicro = 0;
+  float minSegmentLength = 0.2; // Soglia minima lunghezza segmento (es. 0.2 mm)
+  for (int i = lineaList.size() - 1; i >= 0; i--) {
+    Linea curr = lineaList.get(i);
+    if (dist(curr.start, curr.end) < minSegmentLength) {
+      lineaList.remove(i);
+      removedMicro++;
+    }
+  }
+  println("Removed " + removedMicro + " micro-segments (< " + minSegmentLength + ")");
 
   println("Before remove duplicate:"+lineaList.size());
 
@@ -117,7 +134,7 @@ void  orderList() {
   //////////rimuovi le linee duplicate
   for (int i=1; i<ordLineaList.size(); i++) {
     Linea curr=ordLineaList.get(i);
-    if (dist(curr.start, curr.end) < 0.1)
+    if (dist(curr.start, curr.end) < 0.2) // Uniformata soglia micro-segmenti a 0.2
       ordLineaList.remove(i--);
   }
 
