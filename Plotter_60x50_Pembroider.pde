@@ -22,6 +22,7 @@ import java.util.*;
 import java.util.regex.*;
 import java.io.*;
 import java.nio.file.*; // Potrebbe non essere strettamente necessario se si usa loadStrings
+import javax.swing.JOptionPane;
 
 //Variabili del disegno
 float step=1.2;
@@ -30,6 +31,10 @@ boolean mixColors=false; //mescola i colori ogni tanto
 boolean hatching=true; //ottieni i riempimenti a linee parallele
 boolean endStop=false;
 //boolean border=true; //ottieni i bordi dell'immagine
+
+String hatchAlgoKey = "LEGACY";
+String hatchModeFieldName = "PARALLEL";
+String hatchModeLabel = "Legacy PARALLEL (zig-zag)";
 
 //Dimensioni del foglio
 //A3 395 260 0 50
@@ -165,6 +170,7 @@ void setup() {
   machineParams = new RussolinoMachineParams();
   estimator = new RussolinoTimeEstimator(machineParams, this); // Passa 'this' per accedere a loadStrings()
 
+  selectHatchModeDialog();
   selectInput("Please select canvas picture:", "selectImage");
   while (img == null)  delay(100);
   background(255, 255, 255);
@@ -478,6 +484,45 @@ void keyPressed() {
     // Visualizza tutto
     currentPreviewStep = previewSteps.size() - 1;
     disegnaPreview();
+  }
+}
+
+void selectHatchModeDialog() {
+  String[] options = new String[] {
+    "Legacy PARALLEL (zig-zag)",
+    "PEmbroider PARALLEL",
+    "PEmbroider CROSS",
+    "PEmbroider CONCENTRIC",
+    "PEmbroider SATIN",
+    "PEmbroider SPIRAL",
+    "PEmbroider PERLIN",
+    "PEmbroider VECFIELD",
+    "PEmbroider DRUNK"
+  };
+  
+  Object selected = JOptionPane.showInputDialog(
+    null,
+    "Seleziona il tipo di hatching da applicare:",
+    "Selezione Hatching",
+    JOptionPane.QUESTION_MESSAGE,
+    null,
+    options,
+    hatchModeLabel
+  );
+  
+  if (selected == null) {
+    println("Window was closed or you've hit cancel.\n");
+    System.exit(0);
+  }
+  
+  hatchModeLabel = selected.toString();
+  
+  if (hatchModeLabel.equals("Legacy PARALLEL (zig-zag)")) {
+    hatchAlgoKey = "LEGACY";
+    hatchModeFieldName = "PARALLEL";
+  } else {
+    hatchAlgoKey = "PEMBROIDER";
+    hatchModeFieldName = hatchModeLabel.replace("PEmbroider", "").trim();
   }
 }
 

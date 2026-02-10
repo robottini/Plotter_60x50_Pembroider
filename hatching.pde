@@ -25,10 +25,29 @@ void ensurePE() {
     // I plotter preferiscono linee continue o segmenti lunghi definiti dalla geometria,
     // evitando di spezzare una linea retta in centinaia di piccoli movimenti.
     E.toggleResample(false); 
+    applyPlotterSettingsSafe(E);
     
     // Nota: Per l'export finale, si consiglia di usare E.optimize() prima di salvare,
     // ma attenzione che può essere lento. Per i plotter, disabilitare jump stitches
     // e nodi è fondamentale (spesso gestito in fase di export o post-processing).
+  }
+}
+
+void applyPlotterSettingsSafe(PEmbroiderGraphics e) {
+  if (e == null) return;
+  try {
+    java.lang.reflect.Method m = e.getClass().getMethod("toggleConnectingLines", boolean.class);
+    m.invoke(e, false);
+  } catch (Exception ex) {
+  }
+  try {
+    java.lang.reflect.Field f = e.getClass().getField("CONCENTRIC_ANTIALIGN");
+    try {
+      f.setFloat(null, 0.0f);
+    } catch (Exception ex) {
+      f.setFloat(e, 0.0f);
+    }
+  } catch (Exception ex) {
   }
 }
 
@@ -39,6 +58,275 @@ RShape rshapeFromPELine(float x1, float y1, float x2, float y2) {
 }
 
 void intersection(RShape shape, int ic, float distContour) {
+  if (hatchAlgoKey != null && hatchAlgoKey.equals("PEMBROIDER")) {
+    intersectionPEmbroider(shape, ic, distContour);
+  } else {
+    intersectionLegacy(shape, ic, distContour);
+  }
+}
+
+int resolvePEmbroiderHatchMode(String fieldName, int fallback) {
+  if (fieldName == null || fieldName.length() == 0) return fallback;
+  try {
+    java.lang.reflect.Field f = PEmbroiderGraphics.class.getField(fieldName);
+    return f.getInt(null);
+  } catch (Exception e) {
+    return fallback;
+  }
+}
+
+void setPEmbroiderHatchAngleDegSafe(float angleDeg) {
+  ensurePE();
+  try {
+    java.lang.reflect.Method m = E.getClass().getMethod("hatchAngleDeg", float.class);
+    m.invoke(E, angleDeg);
+    return;
+  } catch (Exception e) {
+  }
+  try {
+    java.lang.reflect.Method m = E.getClass().getMethod("hatchAngle", float.class);
+    m.invoke(E, radians(angleDeg));
+  } catch (Exception e) {
+  }
+}
+
+void drawShapeOnPEmbroiderSafe(PShape s) {
+  ensurePE();
+  try {
+    java.lang.reflect.Method m = E.getClass().getMethod("shape", PShape.class, float.class, float.class);
+    m.invoke(E, s, 0.0f, 0.0f);
+    return;
+  } catch (Exception e) {
+  }
+  try {
+    java.lang.reflect.Method m = E.getClass().getMethod("shape", PShape.class, int.class, int.class);
+    m.invoke(E, s, 0, 0);
+    return;
+  } catch (Exception e) {
+  }
+  try {
+    java.lang.reflect.Method m = E.getClass().getMethod("shape", PShape.class);
+    m.invoke(E, s);
+  } catch (Exception e) {
+  }
+}
+
+ArrayList<ArrayList<PVector>> getPEmbroiderPolylinesSafe() {
+  ensurePE();
+  try {
+    java.lang.reflect.Field f = E.getClass().getField("polylines");
+    Object v = f.get(E);
+    return (ArrayList<ArrayList<PVector>>) v;
+  } catch (Exception e) {
+  }
+  try {
+    java.lang.reflect.Method m = E.getClass().getMethod("getPolylines");
+    Object v = m.invoke(E);
+    return (ArrayList<ArrayList<PVector>>) v;
+  } catch (Exception e) {
+  }
+  return null;
+}
+
+ArrayList<PVector> trimPolylineBoth(ArrayList<PVector> poly, float trimStart, float trimEnd) {
+  if (poly == null || poly.size() < 2) return null;
+  if (trimStart <= 0 && trimEnd <= 0) return poly;
+  
+  float total = 0;
+  for (int i = 0; i < poly.size() - 1; i++) {
+    PVector a = poly.get(i);
+    PVector b = poly.get(i + 1);
+    if (a == null || b == null) continue;
+    total += PVector.dist(a, b);
+  }
+  if (total <= 0) return null;
+  if (trimStart + trimEnd >= total) return null;
+  
+  ArrayList<PVector> startTrimmed = poly;
+  if (trimStart > 0) {
+    float remaining = trimStart;
+    int idx = 0;
+    PVector p0 = poly.get(0);
+    while (idx < poly.size() - 1) {
+      PVector p1 = poly.get(idx + 1);
+      float segLen = PVector.dist(p0, p1);
+      if (segLen <= 0) {
+        idx++;
+        p0 = p1;
+        continue;
+      }
+      if (remaining < segLen) {
+        float t = remaining / segLen;
+        PVector newStart = PVector.lerp(p0, p1, t);
+        startTrimmed = new ArrayList<PVector>();
+        startTrimmed.add(newStart);
+        for (int j = idx + 1; j < poly.size(); j++) {
+          startTrimmed.add(poly.get(j));
+        }
+        break;
+      } else {
+        remaining -= segLen;
+        idx++;
+        p0 = p1;
+      }
+    }
+    if (startTrimmed == poly && remaining > 0) return null;
+  }
+  
+  ArrayList<PVector> endTrimmed = startTrimmed;
+  if (trimEnd > 0) {
+    float remaining = trimEnd;
+    int idx = endTrimmed.size() - 1;
+    PVector p0 = endTrimmed.get(idx);
+    while (idx > 0) {
+      PVector p1 = endTrimmed.get(idx - 1);
+      float segLen = PVector.dist(p0, p1);
+      if (segLen <= 0) {
+        idx--;
+        p0 = p1;
+        continue;
+      }
+      if (remaining < segLen) {
+        float t = remaining / segLen;
+        PVector newEnd = PVector.lerp(p0, p1, t);
+        ArrayList<PVector> out = new ArrayList<PVector>();
+        for (int j = 0; j < idx; j++) {
+          out.add(endTrimmed.get(j));
+        }
+        out.add(newEnd);
+        endTrimmed = out;
+        break;
+      } else {
+        remaining -= segLen;
+        idx--;
+        p0 = p1;
+      }
+    }
+    if (endTrimmed == startTrimmed && remaining > 0) return null;
+  }
+  
+  if (endTrimmed.size() < 2) return null;
+  return endTrimmed;
+}
+
+PShape pshapeFromRShape(RShape r) {
+  if (r == null) return null;
+  RPolygon poly = r.toPolygon();
+  if (poly == null || poly.contours == null || poly.contours.length == 0) return null;
+  
+  PShape s = createShape();
+  s.beginShape();
+  for (int i = 0; i < poly.contours.length; i++) {
+    RPoint[] pts = poly.contours[i].points;
+    if (pts == null || pts.length == 0) continue;
+    if (i > 0) s.beginContour();
+    for (int j = 0; j < pts.length; j++) {
+      s.vertex(pts[j].x, pts[j].y);
+    }
+    if (i > 0) s.endContour();
+  }
+  s.endShape(CLOSE);
+  return s;
+}
+
+void intersectionPEmbroider(RShape shape, int ic, float distContour) {
+  if (shape == null) return;
+  
+  RPoint lastHatchEnd = null;
+  
+  RPoint[] sb = shape.getBoundsPoints();
+  float minX = sb[0].x;
+  float minY = sb[0].y;
+  float maxX = sb[2].x;
+  float maxY = sb[2].y;
+  
+  float dx = maxX - minX;
+  float dy = maxY - minY;
+  float angleRadians = atan2(dy, dx);
+  float angleDeg = degrees(angleRadians) + 90 * random(0, 2);
+  
+  ensurePE();
+  E.clear();
+  E.noStroke();
+  E.fill(0);
+  E.hatchSpacing(stepSVG);
+  setPEmbroiderHatchAngleDegSafe(angleDeg);
+  
+  int mode = resolvePEmbroiderHatchMode(hatchModeFieldName, -1);
+  if (mode == -1) mode = resolvePEmbroiderHatchMode("PARALLEL", -1);
+  if (mode != -1) E.hatchMode(mode);
+  
+  PShape ps = pshapeFromRShape(shape);
+  if (ps == null) {
+    intersectionLegacy(shape, ic, distContour);
+    return;
+  }
+  
+  drawShapeOnPEmbroiderSafe(ps);
+  
+  ArrayList<ArrayList<PVector>> polys = getPEmbroiderPolylinesSafe();
+  if (polys == null || polys.size() == 0) {
+    intersectionLegacy(shape, ic, distContour);
+    return;
+  }
+  
+  for (int k = 0; k < polys.size(); k++) {
+    ArrayList<PVector> poly = polys.get(k);
+    if (poly == null || poly.size() < 2) continue;
+    
+    boolean insetPerSegment = (hatchModeFieldName != null) && (hatchModeFieldName.equals("PARALLEL") || hatchModeFieldName.equals("CROSS"));
+    ArrayList<PVector> working = poly;
+    if (!insetPerSegment && distContour > 0) {
+      ArrayList<PVector> trimmed = trimPolylineBoth(poly, distContour, distContour);
+      if (trimmed == null || trimmed.size() < 2) continue;
+      working = trimmed;
+    }
+    
+    for (int i = 0; i < working.size() - 1; i++) {
+      PVector a = working.get(i);
+      PVector b = working.get(i + 1);
+      if (a == null || b == null) continue;
+      
+      float dxl = b.x - a.x;
+      float dyl = b.y - a.y;
+      float lenLine = sqrt(dxl*dxl + dyl*dyl);
+      if (insetPerSegment) {
+        if (lenLine <= stepSVG + 1.0) continue;
+      } else {
+        if (lenLine <= 0.001) continue;
+      }
+      
+      RPoint start;
+      RPoint end;
+      if (insetPerSegment && distContour > 0) {
+        float ux = dxl / lenLine;
+        float uy = dyl / lenLine;
+        float inset = min(distContour, lenLine * 0.5);
+        start = new RPoint(a.x + ux*inset, a.y + uy*inset);
+        end = new RPoint(b.x - ux*inset, b.y - uy*inset);
+      } else {
+        start = new RPoint(a.x, a.y);
+        end = new RPoint(b.x, b.y);
+      }
+      
+      if (lastHatchEnd != null) {
+        float distDirect = dist(lastHatchEnd.x, lastHatchEnd.y, start.x, start.y);
+        float distFlipped = dist(lastHatchEnd.x, lastHatchEnd.y, end.x, end.y);
+        if (distFlipped < distDirect) {
+          RPoint temp = start;
+          start = end;
+          end = temp;
+        }
+      }
+      
+      RShape hatchLine = rshapeFromPELine(start.x, start.y, end.x, end.y);
+      lastHatchEnd = end;
+      formaList.add(new Forma(hatchLine, ic, 1));
+    }
+  }
+}
+
+void intersectionLegacy(RShape shape, int ic, float distContour) {
     RPoint[] ps = null;
     RPoint lastHatchEnd = null; // Variabile per ottimizzazione percorso (zig-zag)
 
