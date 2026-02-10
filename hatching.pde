@@ -11,11 +11,17 @@ PEmbroiderGraphics E;
 
 void ensurePE() {
   if (E == null) {
-    E = new PEmbroiderGraphics(this, width, height);
+    int w = width;
+    int h = height;
+    if (w <= 0) w = (xScreen > 0 ? xScreen : (dimScreenMax > 0 ? dimScreenMax : 1000));
+    if (h <= 0) h = (yScreen > 0 ? (yScreen + 100) : (dimScreenMax > 0 ? dimScreenMax : 1000));
+    if (w <= 0) w = 1;
+    if (h <= 0) h = 1;
+    E = new PEmbroiderGraphics(this, w, h);
     E.beginDraw();
     
     // --- CONFIGURAZIONE BASE PER PLOTTER ---
-    // I plotter lavorano con linee (stroke), non con riempimenti (fill) o satin
+    // I plotter lavorano con linee (stroke), non con riempimenti (fill)
     E.noFill(); 
     E.stroke(0);        // Colore nero per il tratto
     E.strokeWeight(1);  // Spessore unitario
@@ -52,9 +58,50 @@ void applyPlotterSettingsSafe(PEmbroiderGraphics e) {
 }
 
 RShape rshapeFromPELine(float x1, float y1, float x2, float y2) {
-  ensurePE();
-  E.line(x1, y1, x2, y2);
   return RShape.createLine(x1, y1, x2, y2);
+}
+
+PVector firstNonNullPVector(ArrayList<PVector> poly) {
+  if (poly == null) return null;
+  for (int i = 0; i < poly.size(); i++) {
+    PVector p = poly.get(i);
+    if (p != null) return p;
+  }
+  return null;
+}
+
+PVector lastNonNullPVector(ArrayList<PVector> poly) {
+  if (poly == null) return null;
+  for (int i = poly.size() - 1; i >= 0; i--) {
+    PVector p = poly.get(i);
+    if (p != null) return p;
+  }
+  return null;
+}
+
+RShape rshapeFromPolyline(ArrayList<PVector> poly, boolean reverse) {
+  if (poly == null || poly.size() < 2) return null;
+  RShape s = new RShape();
+  if (!reverse) {
+    PVector first = firstNonNullPVector(poly);
+    if (first == null) return null;
+    s.addMoveTo(first.x, first.y);
+    for (int i = 1; i < poly.size(); i++) {
+      PVector p = poly.get(i);
+      if (p == null) continue;
+      s.addLineTo(p.x, p.y);
+    }
+  } else {
+    PVector first = lastNonNullPVector(poly);
+    if (first == null) return null;
+    s.addMoveTo(first.x, first.y);
+    for (int i = poly.size() - 2; i >= 0; i--) {
+      PVector p = poly.get(i);
+      if (p == null) continue;
+      s.addLineTo(p.x, p.y);
+    }
+  }
+  return s;
 }
 
 void intersection(RShape shape, int ic, float distContour) {
@@ -63,6 +110,29 @@ void intersection(RShape shape, int ic, float distContour) {
   } else {
     intersectionLegacy(shape, ic, distContour);
   }
+}
+
+float resolveHatchAngleDeg(RShape shape, int ic) {
+  boolean randomizeAngle = false;
+  if (hatchModeFieldName != null && hatchModeFieldName.equals("PARALLEL")) {
+    randomizeAngle = true;
+  }
+  
+  if (shape == null) return 0;
+  RPoint[] sb = shape.getBoundsPoints();
+  if (sb == null || sb.length < 3) return 0;
+  float dx = sb[2].x - sb[0].x;
+  float dy = sb[2].y - sb[0].y;
+  float baseDeg = degrees(atan2(dy, dx));
+  
+  if (randomizeAngle) {
+    return baseDeg + 90 * (int)random(0, 2);
+  }
+  
+  if (hatchAngleMode != null && hatchAngleMode.equals("AUTO")) {
+    return baseDeg;
+  }
+  return angle;
 }
 
 int resolvePEmbroiderHatchMode(String fieldName, int fallback) {
@@ -86,6 +156,45 @@ void setPEmbroiderHatchAngleDegSafe(float angleDeg) {
   try {
     java.lang.reflect.Method m = E.getClass().getMethod("hatchAngle", float.class);
     m.invoke(E, radians(angleDeg));
+  } catch (Exception e) {
+  }
+}
+
+void setPEmbroiderFloatFieldSafe(String fieldName, float value) {
+  ensurePE();
+  try {
+    java.lang.reflect.Field f = E.getClass().getField(fieldName);
+    try {
+      f.setFloat(null, value);
+    } catch (Exception ex) {
+      f.setFloat(E, value);
+    }
+  } catch (Exception e) {
+  }
+}
+
+void setPEmbroiderIntFieldSafe(String fieldName, int value) {
+  ensurePE();
+  try {
+    java.lang.reflect.Field f = E.getClass().getField(fieldName);
+    try {
+      f.setInt(null, value);
+    } catch (Exception ex) {
+      f.setInt(E, value);
+    }
+  } catch (Exception e) {
+  }
+}
+
+void setPEmbroiderObjectFieldSafe(String fieldName, Object value) {
+  ensurePE();
+  try {
+    java.lang.reflect.Field f = E.getClass().getField(fieldName);
+    try {
+      f.set(null, value);
+    } catch (Exception ex) {
+      f.set(E, value);
+    }
   } catch (Exception e) {
   }
 }
@@ -233,24 +342,28 @@ void intersectionPEmbroider(RShape shape, int ic, float distContour) {
   if (shape == null) return;
   
   RPoint lastHatchEnd = null;
-  
-  RPoint[] sb = shape.getBoundsPoints();
-  float minX = sb[0].x;
-  float minY = sb[0].y;
-  float maxX = sb[2].x;
-  float maxY = sb[2].y;
-  
-  float dx = maxX - minX;
-  float dy = maxY - minY;
-  float angleRadians = atan2(dy, dx);
-  float angleDeg = degrees(angleRadians) + 90 * random(0, 2);
+  float angleDeg = resolveHatchAngleDeg(shape, ic);
   
   ensurePE();
   E.clear();
   E.noStroke();
   E.fill(0);
-  E.hatchSpacing(stepSVG);
-  setPEmbroiderHatchAngleDegSafe(angleDeg);
+  boolean isPerlin = (hatchModeFieldName != null) && hatchModeFieldName.equals("PERLIN");
+  boolean isVecField = (hatchModeFieldName != null) && hatchModeFieldName.equals("VECFIELD");
+  if (isPerlin) {
+    setPEmbroiderFloatFieldSafe("HATCH_SPACING", perlinHatchSpacing);
+    setPEmbroiderFloatFieldSafe("HATCH_SCALE", perlinHatchScale);
+    E.hatchSpacing(perlinHatchSpacing);
+  } else if (isVecField) {
+    Object vf = new MyVecField();
+    setPEmbroiderIntFieldSafe("HATCH_MODE", resolvePEmbroiderHatchMode("VECFIELD", 0));
+    setPEmbroiderObjectFieldSafe("HATCH_VECFIELD", vf);
+    setPEmbroiderFloatFieldSafe("HATCH_SPACING", 4.0);
+    E.hatchSpacing(4.0);
+  } else {
+    E.hatchSpacing(stepSVG);
+  }
+  if (!isPerlin && !isVecField) setPEmbroiderHatchAngleDegSafe(angleDeg);
   
   int mode = resolvePEmbroiderHatchMode(hatchModeFieldName, -1);
   if (mode == -1) mode = resolvePEmbroiderHatchMode("PARALLEL", -1);
@@ -273,8 +386,8 @@ void intersectionPEmbroider(RShape shape, int ic, float distContour) {
   for (int k = 0; k < polys.size(); k++) {
     ArrayList<PVector> poly = polys.get(k);
     if (poly == null || poly.size() < 2) continue;
-    
-    boolean insetPerSegment = (hatchModeFieldName != null) && (hatchModeFieldName.equals("PARALLEL") || hatchModeFieldName.equals("CROSS"));
+
+    boolean insetPerSegment = (hatchModeFieldName != null) && hatchModeFieldName.equals("PARALLEL");
     ArrayList<PVector> working = poly;
     if (!insetPerSegment && distContour > 0) {
       ArrayList<PVector> trimmed = trimPolylineBoth(poly, distContour, distContour);
@@ -292,6 +405,7 @@ void intersectionPEmbroider(RShape shape, int ic, float distContour) {
       float lenLine = sqrt(dxl*dxl + dyl*dyl);
       if (insetPerSegment) {
         if (lenLine <= stepSVG + 1.0) continue;
+        if (lenLine <= 0.001) continue;
       } else {
         if (lenLine <= 0.001) continue;
       }
@@ -301,7 +415,7 @@ void intersectionPEmbroider(RShape shape, int ic, float distContour) {
       if (insetPerSegment && distContour > 0) {
         float ux = dxl / lenLine;
         float uy = dyl / lenLine;
-        float inset = min(distContour, lenLine * 0.5);
+        float inset = min(distContour, lenLine * 0.45);
         start = new RPoint(a.x + ux*inset, a.y + uy*inset);
         end = new RPoint(b.x - ux*inset, b.y - uy*inset);
       } else {
@@ -342,21 +456,7 @@ void intersectionLegacy(RShape shape, int ic, float distContour) {
   float maxX = sb[2].x;
   float maxY = sb[2].y;
 
-  // Determina l'angolo della diagonale del rettangolo di delimitazione.
-  // Calcoliamo l'angolo tra l'asse x positivo e il vettore
-  // che va dal punto in alto a sinistra (sb[0])
-  // al punto in basso a destra (sb[2]).
-  // La funzione atan2(dy, dx) restituisce l'angolo in radianti.
-  // Utilizziamo degrees() per convertirlo in gradi.
-
-  float dx = maxX - minX;
-  float dy = maxY - minY;
-
-  // Calcola l'angolo in radianti
-  float angleRadians = atan2(dy, dx);
-
-  // Converte l'angolo in gradi
-  float angle = degrees(angleRadians)+90*random(0,2);
+  float hatchAngleDeg = resolveHatchAngleDeg(shape, ic);
   // Calcola la diagonale del rettangolo di delimitazione
   float diag = sqrt(pow(maxX-minX, 2) + pow(maxY-minY, 2));
   // Calcola il numero di linee in base alla dimensione della diagonale e allo step
@@ -373,7 +473,7 @@ void intersectionLegacy(RShape shape, int ic, float distContour) {
     float y1 = sbCenter.y - hatchLength/2 + i*stepSVG;
     float x2 = sbCenter.x + hatchLength/2;
     float y2 = sbCenter.y - hatchLength/2 + i*stepSVG;
-    float rad = radians(angle);
+    float rad = radians(hatchAngleDeg);
     float cosA = cos(rad);
     float sinA = sin(rad);
     float rx1 = cosA*(x1 - sbCenter.x) - sinA*(y1 - sbCenter.y) + sbCenter.x;
@@ -494,5 +594,12 @@ class cBrigh {
   cBrigh(color colore, int indice) {
     this.colore=colore;
     this.indice=indice;
+  }
+}
+
+class MyVecField implements PEmbroiderGraphics.VectorField {
+  public PVector get(float x, float y) {
+    x *= 0.05;
+    return new PVector(1, 0.5*sin(x));
   }
 }

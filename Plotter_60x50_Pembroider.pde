@@ -35,6 +35,11 @@ boolean endStop=false;
 String hatchAlgoKey = "LEGACY";
 String hatchModeFieldName = "PARALLEL";
 String hatchModeLabel = "Legacy PARALLEL (zig-zag)";
+String hatchAngleMode = "FIXED";
+boolean hatchDeterministic = true;
+int hatchSeed = 12345;
+float perlinHatchSpacing = 8.0;
+float perlinHatchScale = 1.0;
 
 //Dimensioni del foglio
 //A3 395 260 0 50
@@ -95,7 +100,7 @@ boolean WriteFileLine=true; //scrivi anche il file con le linee e i valori delle
 boolean contour_white=false;  //contorno bianco delle figure 
 float shRed=0.8; //riduzione della shape per avere il bianco intorno - non usato
 String nomeAlgo="SVG"; //prefisso con cui vengono salvati i file
-float angle; //angolo delle linee - da definire se lo vuoi fisso
+float angle=45; //angolo delle linee - da definire se lo vuoi fisso
 float sovr; // larghezza righe in pixel
 //float sovr=2; // larghezza righe in pixel
 
@@ -171,6 +176,19 @@ void setup() {
   estimator = new RussolinoTimeEstimator(machineParams, this); // Passa 'this' per accedere a loadStrings()
 
   selectHatchModeDialog();
+  selectHatchAngleDialog();
+  boolean usesRandomSeed = (hatchAlgoKey != null && hatchAlgoKey.equals("PEMBROIDER") &&
+    hatchModeFieldName != null && hatchModeFieldName.equals("PERLIN"));
+  if (usesRandomSeed) {
+    if (hatchDeterministic) {
+      randomSeed(hatchSeed);
+      noiseSeed(hatchSeed);
+    } else {
+      int s = (int)System.currentTimeMillis();
+      randomSeed(s);
+      noiseSeed(s);
+    }
+  }
   selectInput("Please select canvas picture:", "selectImage");
   while (img == null)  delay(100);
   background(255, 255, 255);
@@ -491,13 +509,10 @@ void selectHatchModeDialog() {
   String[] options = new String[] {
     "Legacy PARALLEL (zig-zag)",
     "PEmbroider PARALLEL",
-    "PEmbroider CROSS",
     "PEmbroider CONCENTRIC",
-    "PEmbroider SATIN",
     "PEmbroider SPIRAL",
     "PEmbroider PERLIN",
-    "PEmbroider VECFIELD",
-    "PEmbroider DRUNK"
+    "PEmbroider VECFIELD"
   };
   
   Object selected = JOptionPane.showInputDialog(
@@ -523,6 +538,141 @@ void selectHatchModeDialog() {
   } else {
     hatchAlgoKey = "PEMBROIDER";
     hatchModeFieldName = hatchModeLabel.replace("PEmbroider", "").trim();
+  }
+}
+
+void selectHatchAngleDialog() {
+  boolean hasAngle = true;
+  if (hatchAlgoKey != null && hatchAlgoKey.equals("PEMBROIDER")) {
+    if (hatchModeFieldName != null && (hatchModeFieldName.equals("SPIRAL") || hatchModeFieldName.equals("CONCENTRIC"))) {
+      hasAngle = false;
+    }
+  }
+  if (hatchModeFieldName != null && hatchModeFieldName.equals("PARALLEL")) {
+    hasAngle = false;
+  }
+  if (hatchModeFieldName != null && hatchModeFieldName.equals("PERLIN")) {
+    hasAngle = false;
+  }
+  if (hatchModeFieldName != null && hatchModeFieldName.equals("VECFIELD")) {
+    hasAngle = false;
+  }
+  
+  boolean hasSeed = false;
+  if (hatchAlgoKey != null && hatchAlgoKey.equals("PEMBROIDER")) {
+    if (hatchModeFieldName != null && hatchModeFieldName.equals("PERLIN")) {
+      hasSeed = true;
+    }
+  }
+  
+  if (hasAngle) {
+  String[] angleOptions = new String[] {
+    "Fisso 45°",
+    "Fisso 0°",
+    "Fisso 90°",
+    "Auto (diagonale shape)"
+  };
+  
+  Object selectedAngle = JOptionPane.showInputDialog(
+    null,
+    "Seleziona l'angolo dell'hatching:",
+    "Angolo Hatching",
+    JOptionPane.QUESTION_MESSAGE,
+    null,
+    angleOptions,
+    (hatchAngleMode != null && hatchAngleMode.equals("AUTO")) ? "Auto (diagonale shape)" : "Fisso 45°"
+  );
+  
+  if (selectedAngle == null) {
+    println("Window was closed or you've hit cancel.\n");
+    System.exit(0);
+  }
+  
+  String angleLabel = selectedAngle.toString();
+  if (angleLabel.equals("Auto (diagonale shape)")) {
+    hatchAngleMode = "AUTO";
+  } else {
+    hatchAngleMode = "FIXED";
+    if (angleLabel.equals("Fisso 0°")) angle = 0;
+    else if (angleLabel.equals("Fisso 90°")) angle = 90;
+    else angle = 45;
+  }
+  } else {
+    hatchAngleMode = "FIXED";
+  }
+  
+  if (hasSeed) {
+  String[] seedOptions = new String[] {
+    "Deterministico (seed fisso)",
+    "Casuale (ogni run)"
+  };
+  
+  Object selectedSeedMode = JOptionPane.showInputDialog(
+    null,
+    "Seleziona la modalità di casualità (PERLIN):",
+    "Seed Random",
+    JOptionPane.QUESTION_MESSAGE,
+    null,
+    seedOptions,
+    hatchDeterministic ? "Deterministico (seed fisso)" : "Casuale (ogni run)"
+  );
+  
+  if (selectedSeedMode == null) {
+    println("Window was closed or you've hit cancel.\n");
+    System.exit(0);
+  }
+  
+  String seedModeLabel = selectedSeedMode.toString();
+  hatchDeterministic = seedModeLabel.startsWith("Deterministico");
+  
+  if (hatchDeterministic) {
+    String input = JOptionPane.showInputDialog(
+      null,
+      "Inserisci un seed intero (stesso input = stesso output):",
+      Integer.toString(hatchSeed)
+    );
+    if (input == null) {
+      println("Window was closed or you've hit cancel.\n");
+      System.exit(0);
+    }
+    try {
+      hatchSeed = Integer.parseInt(input.trim());
+    } catch (Exception e) {
+      hatchSeed = 12345;
+    }
+  }
+  }
+  
+  if (hatchAlgoKey != null && hatchAlgoKey.equals("PEMBROIDER") && hatchModeFieldName != null && hatchModeFieldName.equals("PERLIN")) {
+    String spacingInput = JOptionPane.showInputDialog(
+      null,
+      "PERLIN: HATCH_SPACING (default 8):",
+      Float.toString(perlinHatchSpacing)
+    );
+    if (spacingInput == null) {
+      println("Window was closed or you've hit cancel.\n");
+      System.exit(0);
+    }
+    try {
+      float v = Float.parseFloat(spacingInput.trim().replace(",", "."));
+      if (v > 0.0001) perlinHatchSpacing = v;
+    } catch (Exception e) {
+    }
+    
+    String scaleInput = JOptionPane.showInputDialog(
+      null,
+      "PERLIN: HATCH_SCALE (default 1.0):",
+      Float.toString(perlinHatchScale)
+    );
+    if (scaleInput == null) {
+      println("Window was closed or you've hit cancel.\n");
+      System.exit(0);
+    }
+    try {
+      float v = Float.parseFloat(scaleInput.trim().replace(",", "."));
+      if (v > 0.0001) perlinHatchScale = v;
+    } catch (Exception e) {
+    }
   }
 }
 

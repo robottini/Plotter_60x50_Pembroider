@@ -68,7 +68,7 @@ void creaLista() {
 
   // Rimuovi immediatamente i micro-segmenti che possono essere generati da artefatti geometrici
   int removedMicro = 0;
-  float minSegmentLength = 0.2; // Soglia minima lunghezza segmento (es. 0.2 mm)
+  float minSegmentLength = 0.2;
   for (int i = lineaList.size() - 1; i >= 0; i--) {
     Linea curr = lineaList.get(i);
     if (dist(curr.start, curr.end) < minSegmentLength) {
@@ -134,7 +134,7 @@ void  orderList() {
   //////////rimuovi le linee duplicate
   for (int i=1; i<ordLineaList.size(); i++) {
     Linea curr=ordLineaList.get(i);
-    if (dist(curr.start, curr.end) < 0.2) // Uniformata soglia micro-segmenti a 0.2
+    if (dist(curr.start, curr.end) < 0.2)
       ordLineaList.remove(i--);
   }
 
