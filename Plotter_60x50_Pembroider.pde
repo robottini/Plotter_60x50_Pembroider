@@ -1,15 +1,32 @@
-// Viene creato il gcode a partire da una immagine SVG. L'immagine è di 1000x700 pixel 
-// Caratteristiche principali:
-// - Parsing SVG con Geomerative e gestione primitive con PEmbroider
-// - Hatching ottimizzato con percorso "zig-zag" (serpentina) per minimizzare spostamenti a vuoto
-// - Preview interattiva (tasti 1-4, 9) per visualizzazione passo-passo
-// - Stima tempi di esecuzione GCode (Russolino 3.0)
-// - Scaling preciso (mm carta -> pixel schermo)
-//
-// ogni shape (contorno o fill) viene inserita nella lista
-// viene creata una nuova lista normalizzata alle dimensioni del foglio 
-// crea una lista di sole linee a partire dalle shape
-// viene creato il GCode a partire dalla lista normalizzata
+/*
+  Questo sketch Processing genera un file G-code a partire da un file SVG.
+
+  **Flusso generale**
+  1) Selezione modalità hatching (e opzioni correlate) all'avvio.
+  2) Selezione SVG → parsing tramite Geomerative → estrazione di RShape (in `bezier`).
+  3) Per ogni forma:
+     - Generazione del tratteggio (fill) in `formaList` (type=1)
+     - Aggiunta del contorno "leggermente ristretto" in `formaList` (type=0)
+  4) Conversione delle shape in coordinate "carta" (mm) -> `paperFormList` (ridimensionamento + offset).
+  5) Conversione delle shape in segmenti → `lineaList` (lista di Linea: start/end).
+  6) Ordinamenti (per colore e per brightness) + rimozione duplicati + spezzatura segmenti lunghi.
+  7) Generazione G-code (pennello/penna) con logica di percorrenza ottimizzata.
+  8) Preview interattiva step-by-step e stima del tempo di esecuzione.
+
+  **Unità di misura**
+  - Coordinate interne Geomerative/Processing: "unita' schermo" (pixel dopo scaling dell'SVG).
+  - Coordinate "carta/G-code": millimetri.
+  - La variabile `factor` rappresenta (mm / unità-schermo) per convertire dallo spazio schermo allo spazio carta.
+    Di conseguenza:
+      - stepSVG = step / factor  → quanto vale la distanza `step` (mm) nello spazio schermo.
+      - Quando si disegna a schermo, spesso si fa l'inverso: scale(1/factor).
+
+  **Liste dati principali**
+  - `bezier`: forme (RShape) estratte dall'SVG (ancora nello spazio "schermo").
+  - `formaList`: forme da processare (fill/hatch e contorni), nello spazio "schermo".
+  - `paperFormList`: stesse forme, scalate e traslate in mm (spazio "carta").
+  - `lineaList`: solo segmenti (start/end) pronti per G-code.
+*/
 
 import geomerative.*;
 import java.util.Locale;
@@ -24,7 +41,11 @@ import java.io.*;
 import java.nio.file.*; // Potrebbe non essere strettamente necessario se si usa loadStrings
 import javax.swing.JOptionPane;
 
-//Variabili del disegno
+// -----------------------------
+// Parametri di disegno (alto livello)
+// -----------------------------
+// step: distanza tra righe di hatching sulla carta (mm).
+// Da questo viene derivato stepSVG (distanza equivalente nello spazio schermo) usando `factor`.
 float step=1.2;
 float stepDisplay; float stepSVG; //provarapp
 boolean mixColors=false; //mescola i colori ogni tanto
@@ -32,6 +53,16 @@ boolean hatching=true; //ottieni i riempimenti a linee parallele
 boolean endStop=false;
 //boolean border=true; //ottieni i bordi dell'immagine
 
+// -----------------------------
+// Scelta algoritmo hatching
+// -----------------------------
+// `hatchAlgoKey` seleziona il backend:
+// - "LEGACY": algoritmo storico basato su intersezioni Geomerative
+// - "PEMBROIDER": uso di PEmbroider per generare polilinee di hatching
+//
+// `hatchModeFieldName` è il nome della costante PEmbroiderGraphics (es. PARALLEL, CONCENTRIC, ...).
+// `hatchAngleMode` è usato solo per alcuni mode: FIXED o AUTO (diagonale della bounding box).
+// `hatchDeterministic` + `hatchSeed` rendono ripetibili i mode che usano noise/random (es. PERLIN).
 String hatchAlgoKey = "LEGACY";
 String hatchModeFieldName = "PARALLEL";
 String hatchModeLabel = "Legacy PARALLEL (zig-zag)";
@@ -41,7 +72,9 @@ int hatchSeed = 12345;
 float perlinHatchSpacing = 8.0;
 float perlinHatchScale = 1.0;
 
-//Dimensioni del foglio
+// -----------------------------
+// Dimensioni foglio (mm) e offset (mm)
+// -----------------------------
 //A3 395 260 0 50
 //A4 285 205 0 35
 //A3 Yupo 395 255 0 55
@@ -56,11 +89,15 @@ int yScreen=0; //dimensione y dello screen
 float xxMax=0;
 int dimScreenMax=1000;
 
+// distHatch: margine (mm su carta) tra tratteggio e bordo della forma.
+// Viene passato all'algoritmo di hatching come "inset" per non sporcare il contorno.
 float distHatch=2; //distanza tra inizio e fine del tratteggio e il bordo
 color colHide=#E3E4E6; //colore da non fare - FFFFFF = Bianco puro
 
 
-///  variabili importanti per GCODE
+// -----------------------------
+// Parametri G-code / macchina
+// -----------------------------
 float maxDist=35.0; //max lenght line painted - paper coordinate
 float distMinLines=2; //min distance between lines without up the pen
 
@@ -149,7 +186,10 @@ RussolinoMachineParams machineParams;
 RussolinoTimeEstimator estimator;
 
 
-/////////////////////////
+// -----------------------------
+// settings(): dimensiona la finestra in base al rapporto del foglio.
+// Nota: yScreen+100 lascia spazio in basso per la palette colori e la preview UI.
+// -----------------------------
 void settings() {
   
   if (rapp_carta >= 1) {
@@ -175,8 +215,13 @@ void setup() {
   machineParams = new RussolinoMachineParams();
   estimator = new RussolinoTimeEstimator(machineParams, this); // Passa 'this' per accedere a loadStrings()
 
+  // 1) Selezione modalità di hatching e opzioni correlate (angolo/seed/parametri perlin)
   selectHatchModeDialog();
   selectHatchAngleDialog();
+  // 2) Se il mode usa noise/random (attualmente PERLIN), inizializza i seed.
+  //    In questo modo:
+  //    - "Deterministico" produce sempre lo stesso output a parità di input SVG e parametri.
+  //    - "Casuale" cambia ad ogni avvio.
   boolean usesRandomSeed = (hatchAlgoKey != null && hatchAlgoKey.equals("PEMBROIDER") &&
     hatchModeFieldName != null && hatchModeFieldName.equals("PERLIN"));
   if (usesRandomSeed) {
@@ -189,6 +234,7 @@ void setup() {
       noiseSeed(s);
     }
   }
+  // 3) Selezione SVG. `selectImage` carica in `img`.
   selectInput("Please select canvas picture:", "selectImage");
   while (img == null)  delay(100);
   background(255, 255, 255);
@@ -225,6 +271,18 @@ void setup() {
   println("New SVG x size:"+imageWidth);
   println("New SVG y size:"+imageHeight);
 
+  // -----------------------------
+  // Calcolo fattori di scala: schermo ↔ carta
+  // -----------------------------
+  // Obiettivo:
+  // - Mostrare l'SVG a schermo senza deformazioni
+  // - Derivare `factor` per convertire coordinate da "schermo" a "carta" (mm)
+  //
+  // Nota importante:
+  // - Qui lo sketch scala effettivamente `img` (RShape) per farla entrare nello schermo.
+  // - Successivamente `factor` viene calcolato come rapporto tra "dimensione su carta" e "dimensione su schermo".
+  //   Questo permette a `ridimPaper()` di portare tutte le shape in mm in modo coerente.
+
   // Calculate aspect ratio of the image
   float imageAspectRatio = (float) imageWidth / imageHeight;
   println("Image Aspect Ratio: " + imageAspectRatio);
@@ -239,6 +297,7 @@ void setup() {
   float maxDimension = isXMax ? xScreen : yScreen;
   println("Maximum Dimension: " + maxDimension);
   
+  // svgScaleFactor non è usato direttamente: è stato utile in fase di debug/analisi della scala.
   float svgScaleFactor=maxSVG / (isXMax ? xDim : yDim);   //provarapp
 
   // Calculate scaling factor for mapping to screen dimensions
@@ -274,12 +333,14 @@ void setup() {
   println("Reduction Factor Width: " + reductionFactorWidth);
   println("Reduction Factor Height: " + reductionFactorHeight);
 
-  //factor=reductionFactorWidth*screenScaleFactor;
-  //factor=scaleFactor;
+  // `factor` e' la conversione "carta(mm)" / "schermo(unita')":
+  // se una distanza è D_schermo, la distanza su carta è D_schermo * factor.
+  // Qui viene scelto reductionFactorWidth (coerente con le scelte di scala fatte sopra).
   factor = reductionFactorWidth;
   println("Redction factor paper vs screen:"+factor);
 
-  //stepSVG=step * svgScaleFactor;
+  // step è in mm (carta), quindi stepSVG deve essere la distanza equivalente nello spazio schermo:
+  // stepSVG = step / factor.
   stepSVG = step / factor;
   stepDisplay=step/factor;
   sovr=stepDisplay-0.5;
@@ -295,7 +356,13 @@ void setup() {
 
  ///// ////////////////////////////////////////////////////////////////
  //***********************************************************************************************************
-  // disegno corrente
+  // -----------------------------
+  // Estrazione forme dall'SVG
+  // -----------------------------
+  // `exVert` attraversa ricorsivamente l'albero SVG (children) e costruisce:
+  // - `bezier`: lista di RShape (una per path/contour) con fill/stroke = colore di riempimento.
+  // - `palette`: colori incontrati nell'SVG.
+  // - `ve`: lista punti (debug/analisi).
   ve= new ArrayList();
   RG.setPolygonizer(RG.ADAPTATIVE);
   color fil=img.getStyle().fillColor;
@@ -303,6 +370,13 @@ void setup() {
   println("tot punti da SVG: " + ve.size());
   println("tot Forme da SVG: " +bezier.size());
   print("Linee hatcging processate:");
+  // -----------------------------
+  // Costruzione `formaList`: per ogni shape originale aggiunge:
+  // - tratteggio (type=1) → molte linee
+  // - contorno (type=0) → una shape chiusa
+  //
+  // Nota: la logica attuale scarta le shape con fill bianco puro (#FFFFFF).
+  // -----------------------------
   for (int p=0; p<bezier.size(); p++) {
     RShape curr=bezier.get(p);
     int colForm=curr.getStyle().fillColor;
@@ -320,10 +394,13 @@ void setup() {
     } 
 
     if (p%50 == 0) print(p+"...");
+    // 1) Hatching: genera linee interne e le aggiunge a `formaList` come type=1
     if (hatching) {
       intersection(curr, ic, distHatch); //esegui hatch
     }
     
+    // 2) Contorno: viene leggermente ristretto in proporzione a stepSVG per evitare di "mangiare" troppo bordo.
+    //    Il ridimensionamento è centrato: si scala e poi si trasla per mantenere il centro originale.
     RShape currResize=curr;
     RPoint originalCenter = curr.getCenter();
     RPoint[] sb = currResize.getBoundsPoints();
@@ -347,20 +424,27 @@ void setup() {
   println("Numero colori da SVG:"+palette.length);
 
   //disegna();  // traccia tutte le linee sullo schermo 
+  // 4) Porta tutte le shape in mm e applica offset (spazio "carta")
   ridimPaper(); // ridimensiona secondo le dimensioni della carta
   if (WriteFileLine)
     linee.println("Numero di shape:"+formaList.size());
   println("Numero di shape:"+formaList.size());
   println("*******************************************************************");
+  // 5) Converte ogni shape (contorno e hatching) in segmenti Linea (start/end) su carta
   creaLista();  // passa da shape a linee
   if (WriteFileLine)
     linee.println("Numero di linee:"+lineaList.size());
+  // 6) Ordinamento e pulizia:
+  // - orderList(): raggruppa per colore, rimuove duplicati, spezza linee troppo lunghe
+  // - mixColor(): opzionale, introduce variazioni di colore su alcune linee di hatching
+  // - orderBrigh(): riordina i colori per luminosità per dipingere da chiaro a scuro (o viceversa)
   orderList();  // metti tutti i colori insieme
   if (mixColors) 
     mixColor();    //cambia il colore di alcune linee
   orderBrigh(); // ordina le linee - brightness più alta prima
   background(255);
   disegnaTutto(); //disegna le linee
+  // 7) Generazione G-code
   creaGCODE();  //crea il gcode
   //aggiungi rettangolini con i colori
   disegnaBlocchetti();
@@ -410,21 +494,30 @@ void setup() {
   println("Elaboration time (tenths): "+(millis()-durata)/100);
   
   
-  // Chiama la funzione per calcolare e visualizzare il tempo di esecuzione del G-code
+  // 8) Stima tempo (analisi del file G-code appena scritto)
   calculateGCodeTime();
 
 
   println("End of elaboration");
   
-  // Costruisci i dati per la preview
+  // 9) Prepara gli step per la preview interattiva (tasti 1-4,9)
   buildPreviewSteps();
 }
 
 
 void draw() {
+  // Lo sketch non usa un loop di rendering continuo:
+  // - il lavoro principale avviene in setup()
+  // - la preview viene ridisegnata solo su eventi (keyPressed/mouseWheel)
 }
 
 void keyPressed() {
+  // Preview interattiva:
+  // - '1': avanti di uno step
+  // - '2': indietro di uno step
+  // - '3': avanti di una shape (salta al termine della shape corrente / successiva)
+  // - '4': indietro di una shape (rimuove l'ultima shape interamente)
+  // - '9': mostra tutto
   if (key == '1') {
     // Avanti di uno step (contorno o riga hatch)
     if (currentPreviewStep < previewSteps.size() - 1) {
@@ -506,6 +599,10 @@ void keyPressed() {
 }
 
 void selectHatchModeDialog() {
+  // Selezione "una tantum" all'avvio. Il risultato imposta:
+  // - hatchAlgoKey (LEGACY vs PEMBROIDER)
+  // - hatchModeFieldName (nome costante PEmbroider)
+  // - hatchModeLabel (stringa mostrata)
   String[] options = new String[] {
     "Legacy PARALLEL (zig-zag)",
     "PEmbroider PARALLEL",
@@ -542,6 +639,10 @@ void selectHatchModeDialog() {
 }
 
 void selectHatchAngleDialog() {
+  // Questa funzione gestisce tutte le opzioni "correlate" alla modalita' scelta:
+  // - angolo (solo per mode che lo supportano e lo usano)
+  // - seed deterministico/casuale (solo per mode che usano noise/random)
+  // - parametri per mode specifici (es. PERLIN)
   boolean hasAngle = true;
   if (hatchAlgoKey != null && hatchAlgoKey.equals("PEMBROIDER")) {
     if (hatchModeFieldName != null && (hatchModeFieldName.equals("SPIRAL") || hatchModeFieldName.equals("CONCENTRIC"))) {
@@ -679,6 +780,10 @@ void selectHatchAngleDialog() {
 
 ////////////////////////////////////////////////
 void selectImage(final File f) {
+  // Callback di selectInput():
+  // - valida che sia un file SVG
+  // - imposta percorsi di input/output
+  // - carica l'SVG in `img`
   if (f == null || f.isDirectory()) {
     println("Window was closed or you've hit cancel.\n");
     System.exit(0);
@@ -716,7 +821,7 @@ void selectImage(final File f) {
 }
 ////////////////////////////////////////////////////////////////////////
 String timestamp() {
-  // timestamp
+  // Timestamp breve per nomi file (yyMMdd-HHmmss)
   Date date = new Date();
   SimpleDateFormat sdf = new SimpleDateFormat("yyMMdd-HHmmss");
   return sdf.format(date);
@@ -724,6 +829,9 @@ String timestamp() {
 
 //////////////////////////////////////////////////////////////////////
 void mouseWheel(MouseEvent event) {
+  // Scorrimento preview per gruppi colore:
+  // - rotella avanti: salta al prossimo gruppo (prossimo colore)
+  // - rotella indietro: torna al gruppo precedente
   if (indiceFine >= lineaList.size()) {
     indiceFine=lineaList.size()-1;
   }

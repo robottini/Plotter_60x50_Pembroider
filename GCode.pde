@@ -1,6 +1,27 @@
-/////////////////////////////////// //<>// //<>//
+/*
+  Questo file contiene la generazione del G-code (movimenti e macro operative).
 
-// variabili locali
+  **Input principale**
+  - `lineaList`: lista di segmenti Linea (in mm, spazio carta), gia':
+    - raggruppati per colore
+    - puliti (duplicati/micro-segmenti)
+    - spezzati sotto `maxDist`
+
+  **Output**
+  - Scrive su `OUTPUT` (PrintWriter) un file G-code.
+
+  **Assunzioni macchina (Russolino / FluidNC)**
+  - Assi X/Y: piano di disegno
+  - Asse Z: penna/pennello su/giu' (absZUp/absZDown) + posizione "colore" (colZup/colZDown)
+  - Asse A: avanti/indietro del pennello (abszFront/abszBack) e movimenti nella vaschetta acqua
+
+  Nota: molte variabili (speedAbs, speedContour, pos, absZUp, ...) sono globali
+  e definite nello sketch principale.
+*/
+
+// -----------------------------
+// Stato locale della generazione G-code
+// -----------------------------
 int[] colorTable_GCode;
 boolean is_pen_down;
 float  max_gcode_x=0;
@@ -24,7 +45,11 @@ void creaGCODE() {
   Linea currLinea;
   int typeLine=0;
 
-  /// homing
+  // -----------------------------
+  // Sblocco/homing
+  // -----------------------------
+  // $X: unlock (FluidNC/GRBL-like)
+  // $H*: homing assi (solo se endStop=true)
   String buf = "$X"; 
   OUTPUT.println(buf); 
   Glines++;
@@ -43,7 +68,14 @@ void creaGCODE() {
     currLinea=lineaList.get(i);
     typeLine=currLinea.type;
 
-    // controlla colore. Se bianco vai alla prossima linea, se diverso dal precedente prendi il nuovo colore
+    // -----------------------------
+    // Cambio colore + skip colore "nascosto"
+    // -----------------------------
+    // Se il colore corrente equivale a `colHide` (tipicamente bianco) salta completamente la linea.
+    // Quando cambia colore:
+    // - pulisci pennello
+    // - vai alla tazza colore e carica pigmento
+    // - azzera il contatore distanza continua (`currDist`)
     if (brighCol.get(currLinea.ic).colore == colHide)
       continue;
     if (currLinea.ic != currCol) {
@@ -53,7 +85,11 @@ void creaGCODE() {
       currDist=0;
     }
 
-    // Controlla lunghezza linea totale. Se maggiore maxDist spezza la linea
+    // -----------------------------
+    // Controllo distanza "pittura continua"
+    // -----------------------------
+    // `currDist` accumula quanta distanza e' stata dipinta senza ricaricare colore.
+    // Se superiamo `maxDist`, interrompiamo il segmento per ricaricare.
     PVector in=new PVector(currLinea.start.x, currLinea.start.y);
     PVector fin = new PVector(currLinea.end.x, currLinea.end.y);
     float dimLinea=dist(currLinea.start, currLinea.end);
@@ -69,12 +105,14 @@ void creaGCODE() {
       PVector onLine=new PVector(onLine1.x, onLine1.y);
       buf = ";Break the line:"+nf(dimLinea, 0, 1)+" disTot:"+nf(totDist, 0, 1) + " First Segment:"+nf(manca, 0, 1) + " Second segment:"+nf(dimLinea - manca, 0, 1);
       OUTPUT.println(buf);
-      paint(in, onLine, typeLine);  //dipingi la linea che manca alla fine di maxDist7
+      // Dipingi il primo pezzo (quello che ci porta esattamente a maxDist)
+      paint(in, onLine, typeLine);
       verGCode(in, onLine);
       float onLineX=onLine.x;
       float onLineY=onLine.y;
       currDist=0; //azzera la distanza della linea totale
-      takeColor(currCol); // prendi il colore
+      // Ricarica colore e riparti dal punto di rottura
+      takeColor(currCol);
       in.x=onLineX;
       in.y=onLineY;
     }
@@ -87,6 +125,11 @@ void creaGCODE() {
 
 ///////////////////////////////// 
 void paint(PVector s, PVector e, int typeLine) {
+  // Dipinge un singolo segmento (s -> e).
+  // Ottimizzazione:
+  // - se il punto di inizio e' "vicino" alla posizione corrente (`pos`),
+  //   evita pen_up + move_fast e fa un move_abs in continuita'.
+  // - altrimenti: alza penna, vai in rapido, abbassa, poi dipingi.
   if (!zFront)
     moveFront();    
 
@@ -111,6 +154,7 @@ void paint(PVector s, PVector e, int typeLine) {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 void pen_up() {  //servo up
+  // Z su: alza la penna/pennello (movimento rapido in Z)
   String buf = "G1 Z" + absZUp +" F"+ speedFast; 
   OUTPUT.println(buf); 
   Glines++;
@@ -119,6 +163,7 @@ void pen_up() {  //servo up
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 void pen_down() { //servo down
+  // Z giu': appoggia la penna/pennello sul foglio
   String buf = "G1 Z" + absZDown +" F"+ speedFast; 
   OUTPUT.println(buf);
   Glines++;
@@ -127,6 +172,7 @@ void pen_down() { //servo down
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 void pen_color_up() { //servo down
+  // Z su "colore": alza quanto basta per muoversi sopra le ciotole colore
   String buf = "G1 Z" + colZup +" F"+ speedFast; 
   OUTPUT.println(buf);
   Glines++;
@@ -134,6 +180,7 @@ void pen_color_up() { //servo down
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 void pen_color_down() { //servo down
+  // Z giu' "colore": abbassa il pennello nella ciotola colore
   String buf = "G1 Z" + colZDown +" F"+ speedFast; 
   OUTPUT.println(buf); 
   Glines++;
@@ -141,6 +188,7 @@ void pen_color_down() { //servo down
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 void pen_water_down() { //servo down
+  // Z giu' "acqua": abbassa il pennello nella vaschetta acqua
   String buf = "G1 Z" + watZdown +" F"+ speedFast; 
   OUTPUT.println(buf); 
   Glines++;
@@ -150,6 +198,9 @@ void pen_water_down() { //servo down
 void move_abs(PVector p, int type) { //move slow for painting
 
   String buf;
+  // Velocita' differenziate:
+  // - type 0 (contorno): piu' lenta per precisione
+  // - type 1 (hatching/fill): piu' veloce
   if (type == 0)
     buf = "G1 X" + nf(p.x, 0, 2) + " Y" + nf(p.y, 0, 2) +" F"+ speedContour; 
   else 
@@ -162,6 +213,7 @@ void move_abs(PVector p, int type) { //move slow for painting
 //////////////////////////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 void move_color_slow(PVector p) { //move slow for painting
+  // Movimento lento solo su X (utile per alcune sequenze di intingimento/posa).
   String buf;
   buf = "G1 X" + nf(p.x, 0, 2) +" F"+ speedAbs;
   buf=buf+" ;move_color_slow";
@@ -174,6 +226,7 @@ void move_color_slow(PVector p) { //move slow for painting
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 void move_fast(PVector p) { //move fast the brush //<>// //<>//
+  // Spostamento rapido XY senza cambiare Z (si presume pen_up gestito prima)
   String buf = "G0 X" + nf(p.x, 0, 2) + " Y" + nf(p.y, 0, 2);  //<--- F is the speed of the arm. Decrease it if is too fast
   buf=buf+" ;move_fast";
   OUTPUT.println(buf);  
@@ -183,6 +236,8 @@ void move_fast(PVector p) { //move fast the brush //<>// //<>//
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 void move_color_fast(float x, float y) { //go to color coordinate fast
+  // Movimento verso coordinate "colore".
+  // Se il pennello e' in avanti (zFront=true), prima lo porta indietro con l'asse A.
   if (zFront){
     String buf = "G0 A" + nf(abszBack, 0, 2) +" X" + nf(x, 0, 2);  //<--- F is the speed of the arm. Decrease it if is too fast
     zFront=false;
@@ -201,6 +256,7 @@ void move_color_fast(float x, float y) { //go to color coordinate fast
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////
 void move_water_fast(PVector p) { //go to color coordinate fast
+  // Movimento nella vaschetta acqua: qui Y e' mappato sull'asse A (per come e' cablata la macchina)
   if (zFront)
     moveBack(abszBack);
   String buf = "G1 X" + nf(p.x, 0, 2) +" A" + nf(p.y, 0, 2) +" F"+speedFast;  //<--- F is the speed of the arm. Decrease it if is too fast
@@ -210,6 +266,7 @@ void move_water_fast(PVector p) { //go to color coordinate fast
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////
 void moveFront() {
+  // Porta il pennello in avanti (asse A) per dipingere sul foglio
   String buf = "G1 A" + nf(abszFront, 0, 2) +" F"+speedFast;  //<--- F is the speed of the arm. Decrease it if is too fast
   zFront=true;
   buf=buf+" ;goFront Brush";
@@ -219,6 +276,7 @@ void moveFront() {
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////
 void moveBack(float abszBackPass) { //<>// //<>//
+  // Porta il pennello indietro (asse A) per operazioni su colori/acqua
   String buf = "G1 A" + nf(abszBackPass, 0, 2) +" F"+speedFast;  //<--- F is the speed of the arm. Decrease it if is too fast
   zFront=false;
   buf=buf+" ;goBack Brush";
@@ -228,6 +286,7 @@ void moveBack(float abszBackPass) { //<>// //<>//
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////
 void takeColor(int ic) {
+  // Macro: imposta coordinate ciotola colore e chiama la sequenza di intingimento.
   OUTPUT.println(";take color: "+ic);
   setCoordColor(ic);
   brushColor(xCol, yCol, zCol, ic);
@@ -239,6 +298,7 @@ void takeColor(int ic) {
  //<>// //<>//
 //////////////////////////////////////////////////////
 void setCoordColor(int index) {
+  // Legge tabella coordinate palette (ColorCoord) e le copia nelle variabili di lavoro.
   xCol=ColorCoord[index][0]; 
   yCol=ColorCoord[index][1];
   zCol=ColorCoord[index][2];
@@ -246,6 +306,11 @@ void setCoordColor(int index) {
 
 //////////////////////////////////////////////////////
 void brushColor(float xCol, float yCol, float zCol, int n) {
+  // Sequenza di carico colore:
+  // - vai in rapido alla ciotola
+  // - abbassa il pennello
+  // - fai piccoli "dither" in X e in A (back/front) per caricare bene
+  // - rialza
   if (is_pen_down)
     pen_color_up();
   move_color_fast(xCol, yCol);
@@ -268,6 +333,10 @@ void brushColor(float xCol, float yCol, float zCol, int n) {
 //////////////////////////////////////////////////////////////////////////////////////////////////////
 //// clean the brush
 void clean() {
+  // Sequenza di pulizia:
+  // - vai alla vaschetta acqua
+  // - abbassa il pennello
+  // - fai movimenti ripetuti avanti/indietro (randomizzati) per rimuovere colore residuo
   OUTPUT.println(";Clean brush");
   PVector a=new PVector(x_vaschetta+random(0,8), random(0,4));
   PVector b=new PVector(x_vaschetta-random(0,8), random(0,4));

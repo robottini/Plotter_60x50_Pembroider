@@ -1,5 +1,17 @@
-//////////////////////////////////////////////////////////////
-//disegna le forme su schermo
+/*
+  Questo file contiene le funzioni di disegno a schermo e la preview interattiva.
+
+  **Due modalita' di rendering**
+  - Rendering "diretto": disegna RShape nello spazio schermo (forme originali / hatch in SVG-space)
+  - Rendering "paper": disegna gli stessi elementi come sarebbero su carta (mm), ma ri-scalati sullo schermo
+
+  **Preview interattiva**
+  - `buildPreviewSteps()` costruisce una sequenza lineare di "passi" (contorno + hatch)
+  - `disegnaPreview()` disegna tutti i passi fino a `currentPreviewStep`
+  - Per ogni linea di hatch, mostra un punto rosso (start) e verde (end) per verificare la direzione
+*/
+
+// Disegna tutte le shape (in spazio schermo) usando lo stroke corrente
 void disegna() {
 
   for (int i=0; i<formaList.size(); i++) {
@@ -11,7 +23,8 @@ void disegna() {
 }
 
 ////////////////////////////////////////////////////////////////
-// disegna le forme simulando le dimensioni della carta
+// Disegna `paperFormList` (spazio carta, mm) senza re-scaling:
+// utile per debug "in mm", ma in genere non coincide con la scala della finestra.
 void disegnaPaper() {
   for (int i=0; i<paperFormList.size(); i++) {
     noFill();
@@ -22,7 +35,9 @@ void disegnaPaper() {
 }
 
 /////////////////////////////////////////////////////////////////
-// disegna le linee scalando alle dimensioni dello schermo
+// Disegna tutte le linee finali (`lineaList`) riportandole dalla carta (mm) allo schermo:
+// - translate(-offset) per tornare all'origine dell'SVG
+// - scale(1/factor) per invertire la conversione mm <-> unita' schermo
 void disegnaTutto() {
   background(255);
    
@@ -48,7 +63,8 @@ void disegnaLinea() {
  
   if (indiceInizio >= lineaList.size())disegnaTutto();
   
-  // Disegna tutti i gruppi di colori fino all'indice corrente
+  // Disegna tutti i gruppi di colori fino a `indiceFine`.
+  // La lista e' gia' raggruppata per colore, quindi possiamo fermarci a un cambio colore.
   int i = 0;
   while (i < indiceFine) {
     color coloreGruppo = brighCol.get(lineaList.get(i).ic).colore;
@@ -77,6 +93,8 @@ void disegnaLinea() {
 /////////////////////////////////////////////////////////////////
 // Cambia il colore di alcune linee per creare nuance
 void mixColor() {
+  // "Nuance": per alcune linee di fill (type==1) riassegna un colore a caso.
+  // Serve a sperimentare variazioni cromatiche senza modificare l'SVG.
   for (int i=0; i<lineaList.size(); i++) {
     Linea currLinea=lineaList.get(i);
     int caso=int(random(0, 15));
@@ -91,6 +109,8 @@ void mixColor() {
 
 //////////////////////////////////////////////////////////////////
 void disegnaBlocchetti() {
+  // Disegna la palette come rettangoli in basso con etichetta numerica.
+  // Il colore del testo e' scelto in base alla brightness per essere leggibile.
   for (int i=0; i<palette.length; i++) {
     float dimSq=xScreen/palette.length;
     stroke(0);
@@ -115,6 +135,9 @@ void disegnaBlocchetti() {
 //////////////////////////////////////////////////////////////////
 
 class PreviewStep {
+  // Un singolo "passo" della preview:
+  // - se type=0: contorno (shape chiusa)
+  // - se type=1: hatch (linea/segmento), con start/end evidenziati
   RShape sh;
   int ic;
   int type; // 0=contour, 1=hatch
@@ -142,6 +165,13 @@ ArrayList<PreviewStep> previewSteps = new ArrayList<PreviewStep>();
 int currentPreviewStep = -1;
 
 void buildPreviewSteps() {
+  // Costruisce la sequenza di preview a partire da `paperFormList`.
+  //
+  // In `paperFormList` la pipeline principale aggiunge prima tante linee di hatch e poi il contorno:
+  //   [Hatch, Hatch, ..., Contour] (per ogni shape originale)
+  //
+  // Per la preview, e' piu' leggibile mostrare:
+  //   [Contour, Hatch, Hatch, ...]
   previewSteps.clear();
   
   // paperFormList contiene sequenze di: [Hatch, Hatch, ..., Contour] per ogni forma originale.
@@ -188,7 +218,9 @@ void drawPreviewStep(int stepIndex) {
   RG.ignoreStyles(true);
   
   noFill();
-  strokeWeight(sovr * factor); // Compensiamo lo scale(1/factor)
+  // Compensiamo lo scale(1/factor) applicato alla shape:
+  // lo strokeWeight viene moltiplicato per factor per avere uno spessore visivo coerente.
+  strokeWeight(sovr * factor);
   
   // Usa il colore corretto dalla mappa brighCol
   if (step.ic >= 0 && step.ic < brighCol.size()) {
@@ -222,6 +254,8 @@ void drawPreviewStep(int stepIndex) {
 }
 
 void disegnaPreview() {
+  // Disegna tutti i passi fino a quello selezionato.
+  // `currentPreviewStep` viene aggiornato da keyPressed() nello sketch principale.
   background(255); // Sfondo bianco come richiesto (era nero nel precedente tentativo fallito)
   
   // Disegna tutti gli step fino a quello corrente

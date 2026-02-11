@@ -1,11 +1,24 @@
- /**
- * Funzione per creare un effetto di hatching (tratteggio) su una forma
- * Utilizza la libreria Geomerative per manipolare forme vettoriali
- * 
- * @param shape - La forma RShape da riempire con l'hatching
- * @param ic - Indice del colore da utilizzare per le linee di hatching
- * @param distContour - Distanza delle linee di hatching dal bordo della forma
- */
+/*
+  Questo file contiene tutta la logica di hatching (tratteggio) e le strutture dati
+  condivise con il resto dello sketch (Forma / Linea / cBrigh).
+
+  **Due backend di hatching**
+  - LEGACY: genera linee tramite Geomerative:
+    1) crea una "famiglia" di linee parallele
+    2) calcola le intersezioni linea-shape
+    3) accoppia i punti (p1,p2) e crea segmenti interni
+  - PEMBROIDER: usa PEmbroider per produrre polilinee interne (riempimento),
+    poi converte ogni segmento in RShape lineare da aggiungere a `formaList`.
+
+  **Perché usiamo reflection (metodi *Safe*)**
+  PEmbroider può cambiare nomi di metodi/campi tra versioni (es. hatchAngle vs hatchAngleDeg,
+  polylines vs getPolylines, ecc.). I wrapper "Safe" provano piu' strade e falliscono "silenziosamente"
+  così lo sketch resta compatibile senza vincolare una versione specifica della libreria.
+
+  **Coordinate**
+  Tutto l'hatching qui lavora nello stesso spazio delle shape SVG gia' scalate per lo schermo
+  (quindi in "unita' schermo"). La conversione in mm avviene piu' avanti in `ridimPaper()`.
+*/
 import processing.embroider.*;
 PEmbroiderGraphics E;
 
@@ -41,6 +54,10 @@ void ensurePE() {
 
 void applyPlotterSettingsSafe(PEmbroiderGraphics e) {
   if (e == null) return;
+  // Alcune build di PEmbroider offrono opzioni "embroidery-like" che non vogliamo su un plotter:
+  // - connecting lines: linee di collegamento tra polilinee distinte
+  // - antialign (per concentrici): offset a zig-zag tra anelli
+  // Qui proviamo a disattivarle se esistono.
   try {
     java.lang.reflect.Method m = e.getClass().getMethod("toggleConnectingLines", boolean.class);
     m.invoke(e, false);
@@ -58,6 +75,8 @@ void applyPlotterSettingsSafe(PEmbroiderGraphics e) {
 }
 
 RShape rshapeFromPELine(float x1, float y1, float x2, float y2) {
+  // Uniformiamo la creazione di una linea: ci serve una RShape perché il resto
+  // della pipeline (ridimensionamento, conversione in Linea, ecc.) è basata su Geomerative.
   return RShape.createLine(x1, y1, x2, y2);
 }
 
@@ -80,6 +99,9 @@ PVector lastNonNullPVector(ArrayList<PVector> poly) {
 }
 
 RShape rshapeFromPolyline(ArrayList<PVector> poly, boolean reverse) {
+  // Converte una polilinea (lista di PVectors) in una RShape.
+  // reverse=true e' utile quando vogliamo "invertire" la direzione del path
+  // (ad es. per ridurre i salti/pen-up tra linee successive).
   if (poly == null || poly.size() < 2) return null;
   RShape s = new RShape();
   if (!reverse) {
@@ -105,6 +127,9 @@ RShape rshapeFromPolyline(ArrayList<PVector> poly, boolean reverse) {
 }
 
 void intersection(RShape shape, int ic, float distContour) {
+  // Dispatcher: sceglie quale backend usare.
+  // - PEMBROIDER: hatch tramite PEmbroider e conversione in segmenti
+  // - altrimenti: algoritmo storico Geomerative
   if (hatchAlgoKey != null && hatchAlgoKey.equals("PEMBROIDER")) {
     intersectionPEmbroider(shape, ic, distContour);
   } else {
@@ -113,6 +138,11 @@ void intersection(RShape shape, int ic, float distContour) {
 }
 
 float resolveHatchAngleDeg(RShape shape, int ic) {
+  // Restituisce l'angolo da usare per l'hatching in gradi.
+  // - PARALLEL "legacy" storicamente randomizzava tra baseDeg e baseDeg+90
+  //   (questo mantiene l'effetto "variabile" tra shape).
+  // - AUTO: usa la diagonale della bounding box (stabile per shape)
+  // - FIXED: usa la variabile globale `angle` impostata dall'utente.
   boolean randomizeAngle = false;
   if (hatchModeFieldName != null && hatchModeFieldName.equals("PARALLEL")) {
     randomizeAngle = true;
@@ -136,6 +166,8 @@ float resolveHatchAngleDeg(RShape shape, int ic) {
 }
 
 int resolvePEmbroiderHatchMode(String fieldName, int fallback) {
+  // Traduce un nome di campo (es. "PARALLEL", "CONCENTRIC") nel valore int della costante
+  // in PEmbroiderGraphics. In caso di errori ritorna fallback.
   if (fieldName == null || fieldName.length() == 0) return fallback;
   try {
     java.lang.reflect.Field f = PEmbroiderGraphics.class.getField(fieldName);
@@ -146,6 +178,8 @@ int resolvePEmbroiderHatchMode(String fieldName, int fallback) {
 }
 
 void setPEmbroiderHatchAngleDegSafe(float angleDeg) {
+  // Imposta l'angolo dell'hatching in PEmbroider.
+  // Alcune versioni espongono hatchAngleDeg(gradi), altre hatchAngle(radianti).
   ensurePE();
   try {
     java.lang.reflect.Method m = E.getClass().getMethod("hatchAngleDeg", float.class);
@@ -161,6 +195,9 @@ void setPEmbroiderHatchAngleDegSafe(float angleDeg) {
 }
 
 void setPEmbroiderFloatFieldSafe(String fieldName, float value) {
+  // Prova a settare un campo float su PEmbroider:
+  // - come static field (null target) oppure
+  // - come field dell'istanza `E`
   ensurePE();
   try {
     java.lang.reflect.Field f = E.getClass().getField(fieldName);
@@ -174,6 +211,7 @@ void setPEmbroiderFloatFieldSafe(String fieldName, float value) {
 }
 
 void setPEmbroiderIntFieldSafe(String fieldName, int value) {
+  // Variante per campi int (stesso approccio del setter float).
   ensurePE();
   try {
     java.lang.reflect.Field f = E.getClass().getField(fieldName);
@@ -187,6 +225,7 @@ void setPEmbroiderIntFieldSafe(String fieldName, int value) {
 }
 
 void setPEmbroiderObjectFieldSafe(String fieldName, Object value) {
+  // Variante per campi Object (es. HATCH_VECFIELD).
   ensurePE();
   try {
     java.lang.reflect.Field f = E.getClass().getField(fieldName);
@@ -200,6 +239,8 @@ void setPEmbroiderObjectFieldSafe(String fieldName, Object value) {
 }
 
 void drawShapeOnPEmbroiderSafe(PShape s) {
+  // Disegna una PShape dentro PEmbroider.
+  // Anche qui ci sono varianti di firma (shape(ps, x, y), shape(ps, int,int), shape(ps)).
   ensurePE();
   try {
     java.lang.reflect.Method m = E.getClass().getMethod("shape", PShape.class, float.class, float.class);
@@ -221,6 +262,8 @@ void drawShapeOnPEmbroiderSafe(PShape s) {
 }
 
 ArrayList<ArrayList<PVector>> getPEmbroiderPolylinesSafe() {
+  // Recupera l'output dell'hatching da PEmbroider.
+  // A seconda della versione può essere un campo `polylines` o un metodo `getPolylines()`.
   ensurePE();
   try {
     java.lang.reflect.Field f = E.getClass().getField("polylines");
@@ -238,6 +281,13 @@ ArrayList<ArrayList<PVector>> getPEmbroiderPolylinesSafe() {
 }
 
 ArrayList<PVector> trimPolylineBoth(ArrayList<PVector> poly, float trimStart, float trimEnd) {
+  // Taglia una polilinea "in lunghezza":
+  // - rimuove `trimStart` dall'inizio
+  // - rimuove `trimEnd` dalla fine
+  //
+  // Serve per "staccare dal bordo" l'hatching in mode che restituiscono una polilinea continua
+  // (CONCENTRIC, SPIRAL, PERLIN, VECFIELD...). Per PARALLEL, invece, spesso conviene insettare
+  // ogni segmento singolarmente (gestito più sotto con insetPerSegment).
   if (poly == null || poly.size() < 2) return null;
   if (trimStart <= 0 && trimEnd <= 0) return poly;
   
@@ -319,6 +369,10 @@ ArrayList<PVector> trimPolylineBoth(ArrayList<PVector> poly, float trimStart, fl
 }
 
 PShape pshapeFromRShape(RShape r) {
+  // Converte una RShape (Geomerative) in una PShape (Processing),
+  // perché PEmbroider lavora su PShape per generare l'hatching.
+  //
+  // Nota: i contour interni (buchi) vengono gestiti con beginContour/endContour.
   if (r == null) return null;
   RPolygon poly = r.toPolygon();
   if (poly == null || poly.contours == null || poly.contours.length == 0) return null;
@@ -345,22 +399,28 @@ void intersectionPEmbroider(RShape shape, int ic, float distContour) {
   float angleDeg = resolveHatchAngleDeg(shape, ic);
   
   ensurePE();
+  // Per ogni shape, azzeriamo l'output interno di PEmbroider.
+  // PEmbroider accumula polylines tra draw successive, quindi serve clear().
   E.clear();
   E.noStroke();
   E.fill(0);
   boolean isPerlin = (hatchModeFieldName != null) && hatchModeFieldName.equals("PERLIN");
   boolean isVecField = (hatchModeFieldName != null) && hatchModeFieldName.equals("VECFIELD");
   if (isPerlin) {
+    // PERLIN: spacing e scala del noise sono esposti come parametri UI all'avvio.
     setPEmbroiderFloatFieldSafe("HATCH_SPACING", perlinHatchSpacing);
     setPEmbroiderFloatFieldSafe("HATCH_SCALE", perlinHatchScale);
     E.hatchSpacing(perlinHatchSpacing);
   } else if (isVecField) {
+    // VECFIELD: snippet "fisso" come da esempio (campo vettoriale + spacing 4).
+    // L'orientamento locale è determinato dal vettore ritornato da MyVecField.get(x,y).
     Object vf = new MyVecField();
     setPEmbroiderIntFieldSafe("HATCH_MODE", resolvePEmbroiderHatchMode("VECFIELD", 0));
     setPEmbroiderObjectFieldSafe("HATCH_VECFIELD", vf);
     setPEmbroiderFloatFieldSafe("HATCH_SPACING", 4.0);
     E.hatchSpacing(4.0);
   } else {
+    // Default: spacing allineato a stepSVG (equivalente a `step` mm sulla carta).
     E.hatchSpacing(stepSVG);
   }
   if (!isPerlin && !isVecField) setPEmbroiderHatchAngleDegSafe(angleDeg);
@@ -387,6 +447,10 @@ void intersectionPEmbroider(RShape shape, int ic, float distContour) {
     ArrayList<PVector> poly = polys.get(k);
     if (poly == null || poly.size() < 2) continue;
 
+    // insetPerSegment:
+    // - per PARALLEL, PEmbroider restituisce spesso tante linee separate; insettare per-segmento
+    //   evita che la linea venga accorciata "male" dopo un trim globale.
+    // - per gli altri mode, lavoriamo su una polilinea continua e facciamo trim ai capi.
     boolean insetPerSegment = (hatchModeFieldName != null) && hatchModeFieldName.equals("PARALLEL");
     ArrayList<PVector> working = poly;
     if (!insetPerSegment && distContour > 0) {
@@ -404,6 +468,7 @@ void intersectionPEmbroider(RShape shape, int ic, float distContour) {
       float dyl = b.y - a.y;
       float lenLine = sqrt(dxl*dxl + dyl*dyl);
       if (insetPerSegment) {
+        // Filtro: in PARALLEL si evitano segmenti molto corti (spesso artefatti sul bordo).
         if (lenLine <= stepSVG + 1.0) continue;
         if (lenLine <= 0.001) continue;
       } else {
@@ -413,6 +478,7 @@ void intersectionPEmbroider(RShape shape, int ic, float distContour) {
       RPoint start;
       RPoint end;
       if (insetPerSegment && distContour > 0) {
+        // Inset per-segmento: sposta start/end verso l'interno lungo la direzione del segmento.
         float ux = dxl / lenLine;
         float uy = dyl / lenLine;
         float inset = min(distContour, lenLine * 0.45);
@@ -424,6 +490,8 @@ void intersectionPEmbroider(RShape shape, int ic, float distContour) {
       }
       
       if (lastHatchEnd != null) {
+        // Serpentina/zig-zag: se conviene, invertiamo la direzione del segmento
+        // per ridurre la distanza dall'ultimo punto finale tracciato.
         float distDirect = dist(lastHatchEnd.x, lastHatchEnd.y, start.x, start.y);
         float distFlipped = dist(lastHatchEnd.x, lastHatchEnd.y, end.x, end.y);
         if (distFlipped < distDirect) {
@@ -441,6 +509,11 @@ void intersectionPEmbroider(RShape shape, int ic, float distContour) {
 }
 
 void intersectionLegacy(RShape shape, int ic, float distContour) {
+    // Algoritmo "storico":
+    // - genera una griglia di linee (ruotate di hatchAngleDeg)
+    // - per ciascuna linea calcola le intersezioni con la shape
+    // - ordina i punti per x e li accoppia (p0,p1), (p2,p3), ...
+    // - crea segmenti interni, staccati dal bordo di `distContour`
     RPoint[] ps = null;
     RPoint lastHatchEnd = null; // Variabile per ottimizzazione percorso (zig-zag)
 
@@ -598,6 +671,9 @@ class cBrigh {
 }
 
 class MyVecField implements PEmbroiderGraphics.VectorField {
+  // Esempio di campo vettoriale:
+  // per ogni punto (x,y) ritorna un vettore che rappresenta l'orientamento locale delle "stitches".
+  // Qui l'orientamento cambia con una sinusoide lungo x, generando una tessitura ondulata.
   public PVector get(float x, float y) {
     x *= 0.05;
     return new PVector(1, 0.5*sin(x));

@@ -1,7 +1,22 @@
 
-////////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////
-// Funzione per calcolare e visualizzare il tempo di esecuzione del G-code
+/*
+  Questo file implementa una stima del tempo di esecuzione del G-code.
+
+  **Idea**
+  - Legge il file G-code generato (outFile)
+  - Parsea le righe riconoscendo comandi di movimento (G0/G1) e comandi spindle (M3/M5)
+  - Stima il tempo usando profili di velocita' trapezoidali/triangolari in base a:
+    - maxVelocity e maxAcceleration per asse (parametri macchina)
+    - feedrate (F) impostato nel G-code
+  - Somma anche tempo di spin-up/spin-down spindle (se presenti)
+
+  **Limiti**
+  - Supporta principalmente movimenti lineari (G0/G1).
+  - Non modella jerk/junction in modo completo (junctionDeviation e' presente ma non usato).
+  - Assume coordinate assolute gia' coerenti con la macchina.
+*/
+
+// Funzione "facciata": chiama lo stimatore e stampa un report leggibile in console
 void calculateGCodeTime() {
   if (outFile == null || outFile.isEmpty()) {
     println("ERRORE: Percorso del file G-code non definito. Impossibile stimare il tempo.");
@@ -30,7 +45,7 @@ void calculateGCodeTime() {
 }
 
 
-// --- INIZIO CLASSI PER LA STIMA DEL TEMPO (COPIATE DA claude.txt) ---
+// --- CLASSI PER LA STIMA DEL TEMPO ---
 
 // Parametri macchina FluidNC - Russolino 3.0 (da YAML)
 class RussolinoMachineParams {
@@ -41,12 +56,14 @@ class RussolinoMachineParams {
     int spindleSpindownMs = 4000;
     
     public RussolinoMachineParams() {
+        // Velocita' massime in mm/min (come tipicamente usate in GRBL/FluidNC)
         maxVelocity = new HashMap<String, Float>();
         maxVelocity.put("X", 12000.0f);  // mm/min
         maxVelocity.put("Y", 12000.0f);
         maxVelocity.put("Z", 8000.0f);
         maxVelocity.put("A", 8000.0f);
         
+        // Accelerazioni massime in mm/s^2
         maxAcceleration = new HashMap<String, Float>();
         maxAcceleration.put("X", 2500.0f);  // mm/s²
         maxAcceleration.put("Y", 2500.0f);
@@ -70,6 +87,9 @@ class GCodeCommand {
     }
     
     private void parseLine() {
+        // Normalizzazione:
+        // - rimuove commenti ';' e commenti tra parentesi '(...)'
+        // - estrae il tipo comando (G0/G1/M3/...) e parametri X/Y/Z/A/F/S
         if (originalLine.length() == 0) return;
         
         String cleanLine = originalLine.split(";")[0].split("\\(")[0].trim();
@@ -125,6 +145,9 @@ class RussolinoTimeEstimator {
     }
     
     private float calculateDistance(HashMap<String, Float> startPos, HashMap<String, Float> endPos) {
+        // Distanza euclidea nello spazio XYZ (l'asse A qui non entra nella distanza).
+        // Questo e' coerente con un plotter dove A rappresenta un movimento "meccanico" separato
+        // (avanti/indietro del pennello), ma e' una semplificazione.
         float dx = endPos.getOrDefault("X", startPos.get("X")) - startPos.get("X");
         float dy = endPos.getOrDefault("Y", startPos.get("Y")) - startPos.get("Y");
         float dz = endPos.getOrDefault("Z", startPos.get("Z")) - startPos.get("Z");
@@ -160,7 +183,7 @@ class RussolinoTimeEstimator {
             }
         }
         
-        // Converti da mm/min a mm/s
+        // Converti da mm/min a mm/s per lavorare con accelerazioni in mm/s^2
         float velocityMmS = effectiveVelocity / 60.0f;
         
         // Calcolo del profilo di velocità con accelerazione/decelerazione
@@ -201,12 +224,14 @@ class RussolinoTimeEstimator {
         
         // Gestione comandi spindle
         if (command.commandType.equals("M3") || command.commandType.equals("M03")) {
+            // Accende spindle: aggiunge solo la latenza di spin-up
             if (!spindleOn) {
                 spindleTime += machine.spindleSpinupMs / 1000.0f;
                 spindleOn = true;
             }
             return 0.0f;
         } else if (command.commandType.equals("M5") || command.commandType.equals("M05")) {
+            // Spegne spindle: aggiunge solo la latenza di spin-down
             if (spindleOn) {
                 spindleTime += machine.spindleSpindownMs / 1000.0f;
                 spindleOn = false;
@@ -216,6 +241,7 @@ class RussolinoTimeEstimator {
         
         // Movimenti - usa solo il metodo avanzato
         if (command.commandType.equals("G0") || command.commandType.equals("G00")) {
+            // G0: rapido, limitato dalle maxVelocity per gli assi attivi
             HashMap<String, Float> newPosition = new HashMap<String, Float>(currentPosition);
             
             for (String axis : Arrays.asList("X", "Y", "Z", "A")) {
@@ -232,6 +258,7 @@ class RussolinoTimeEstimator {
             validCommands++;
             
         } else if (command.commandType.equals("G1") || command.commandType.equals("G01")) {
+            // G1: movimento controllato, usa currentFeedrate ma sempre limitato dai massimi macchina
             HashMap<String, Float> newPosition = new HashMap<String, Float>(currentPosition);
             
             for (String axis : Arrays.asList("X", "Y", "Z", "A")) {
@@ -263,7 +290,8 @@ class RussolinoTimeEstimator {
         currentPosition.put("A", 0.0f);
         currentFeedrate = 1000.0f;
         
-        // Utilizza Processing's loadStrings() per leggere il file
+        // Utilizza Processing loadStrings() per leggere il file:
+        // - evita gestione manuale di FileInputStream nel contesto Processing
         String[] lines;
         try {
             lines = parent.loadStrings(filePath); // Usa il riferimento al PApplet

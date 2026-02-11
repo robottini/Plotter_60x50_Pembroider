@@ -1,4 +1,16 @@
-///ridimensiona la lista di shape secondo le dimensioni della carta
+/*
+  Questo file gestisce la conversione:
+  - da forme (RShape) in "spazio schermo" -> a forme in "spazio carta" (mm)
+  - da forme -> a segmenti Linea (start/end) che poi diventano movimenti nel G-code
+
+  In pratica qui avviene la trasformazione fondamentale:
+  1) `ridimPaper()` applica scala (`factor`) e offset (xOffset/yOffset) alle shape
+  2) `creaLista()` discretizza le shape in segmenti (Linee)
+  3) `orderList()` raggruppa per colore, rimuove duplicati e spezza i segmenti troppo lunghi
+  4) `orderBrigh()` riordina i gruppi colore per "brightness" (luminosita')
+*/
+
+// Ridimensiona (scala + trasla) tutte le shape in `formaList` nello spazio carta (mm)
 void ridimPaper() {
   //orderList();
   //calcola il minimo e il massimo delle figure ridimensionate
@@ -12,7 +24,9 @@ void ridimPaper() {
     RShape s=formaList.get(i).sh;
     int    iCol=formaList.get(i).ic;
     int    typeC=formaList.get(i).type;
-    s.scale(factor); //scala secondo il fattore di riduzione
+    // `factor` = mm / unita' schermo: porta la shape in millimetri
+    s.scale(factor);
+    // Offset su carta: permette di lasciare margini e posizionare la stampa sul foglio reale
     s.translate(xOffset, yOffset);
 
     paperFormList.add(new Forma(s, iCol, typeC));
@@ -34,7 +48,8 @@ void ridimPaper() {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////
-/// crea la lista di linee LineaList a partire dalle shape di paperFormList
+// Crea `lineaList` trasformando ogni contorno/polilinea in segmenti consecutivi
+// Nota: qui non esiste ancora alcuna logica di "pen-up" o percorsi ottimizzati: e' solo geometria.
 void creaLista() {
   RCommand.setSegmentator(RCommand.ADAPTATIVE);
   for (int i=0; i<paperFormList.size(); i++) {
@@ -49,8 +64,8 @@ void creaLista() {
         //  lineaList.add(new Linea(startS, endS, paperFormList.get(i).ic, paperFormList.get(i).type)); //aggiungi un record alla lista di linee
         //} else  //la forma è complessa e ci sono molti punti
         //{
-        for (int j = 1; j < sPolygon.contours[k].points.length; j++)
-        {
+        // Ogni coppia di punti consecutivi diventa una Linea
+        for (int j = 1; j < sPolygon.contours[k].points.length; j++) {
           endS = sPolygon.contours[k].points[j];   //prendi il finale della prossima riga
           lineaList.add(new Linea(startS, endS, paperFormList.get(i).ic, paperFormList.get(i).type));
           startS=endS; //la fine della precedente riga è l'inizio della nuova riga
@@ -66,7 +81,9 @@ void creaLista() {
     }
   }
 
-  // Rimuovi immediatamente i micro-segmenti che possono essere generati da artefatti geometrici
+  // Rimuove micro-segmenti:
+  // durante la polygonization possono comparire segmenti quasi nulli (artefatti o punti ripetuti).
+  // Su un plotter questi creano movimenti inutili e possono peggiorare la fluidita'.
   int removedMicro = 0;
   float minSegmentLength = 0.2;
   for (int i = lineaList.size() - 1; i >= 0; i--) {
@@ -102,7 +119,11 @@ void creaLista() {
    */
 }
 //////////////////////////////////////////////////////////////////////////////////////
-/// Ordina la lista delle shape su carta per colore
+// Raggruppa `lineaList` per colore (ic), poi:
+// - elimina duplicati (anche invertiti)
+// - spezza segmenti troppo lunghi (maxDist) per rispettare limiti di "pittura continua"
+//
+// Nota: la rimozione duplicati e' efficace soprattutto per contorni e per alcuni hatch mode.
 void  orderList() {
   ArrayList<Linea> ordLineaList = new ArrayList<Linea>();
   Linea ordLinea=lineaList.get(0);
@@ -113,6 +134,8 @@ void  orderList() {
     //  boolean trovato=false;
     int indElem=0;
     //   while (!trovato && indElem < lineaList.size()) {
+    // Sposta in `ordLineaList` tutte le linee che condividono il colore corrente iColor.
+    // Quando terminano, passa al prossimo colore (primo elemento rimasto).
     while (indElem < lineaList.size()) {
       ordLinea = lineaList.get(indElem);
       if (iColor == ordLinea.ic) {
@@ -131,7 +154,7 @@ void  orderList() {
       }
     }
   }
-  //////////rimuovi le linee duplicate
+  // Rimozione "grezza" dei segmenti quasi nulli (seconda difesa oltre a creaLista()).
   for (int i=1; i<ordLineaList.size(); i++) {
     Linea curr=ordLineaList.get(i);
     if (dist(curr.start, curr.end) < 0.2)
@@ -146,6 +169,7 @@ void  orderList() {
       Linea prev = ordLineaList.get(j);
 
       if (currColor != prev.ic) {
+        // Poiche' la lista e' raggruppata per colore, quando cambia colore possiamo fermarci.
         j = ordLineaList.size();
         continue;
       }
@@ -180,7 +204,8 @@ void  orderList() {
   }
   //  println("Lunghezza totale linee lista:"+lungLista);
 
-  ////// spezza le linee in pezzi più piccoli se maggiori di maxDist
+  // Spezza le linee in pezzi piu' piccoli se maggiori di maxDist.
+  // Motivazione: riduce colature/accumuli e permette cicli di "pulizia pennello" piu' frequenti.
   ordLineaList.clear();
   for (int i=0; i<lineaList.size(); i++) {
     Linea t=lineaList.get(i);
@@ -235,7 +260,11 @@ void  orderBrigh() {
   //for(int i = 0; i < totColori; i++)
   //  println(brighCol.get(i).indice+"  "+ hex(brighCol.get(i).colore));
 
-  // ordina i colori sulla base della brightness (bubble sort)
+  // Ordina i colori per "energia RGB" (approssimazione della luminosita'):
+  //   a = r^2 + g^2 + b^2
+  // Ordinamento decrescente: dal piu' "chiaro" (energia alta) al piu' "scuro".
+  //
+  // Nota: e' un bubble sort perche' la palette e' piccola e questo e' semplice da mantenere.
   for (int i = 0; i < totColori; i++) {
     boolean flag = false;
     for (int j = 0; j < totColori-1; j++) {
@@ -260,7 +289,11 @@ void  orderBrigh() {
     print("Colore "+i+": "+ hex(brighCol.get(i).colore)+" - ");
   println("");
 
-  //crea una lista e copia sopra lineaList
+  // Applica il nuovo ordine ai gruppi nella `lineaList`.
+  // La logica:
+  // - copia lineaList in una lista temporanea
+  // - svuota lineaList
+  // - per ogni colore ordinato, sposta tutte le linee che lo usano
   ArrayList<Linea> lineaBrigh = new ArrayList<Linea>();
   lineaBrigh.clear();
   lineaBrigh.addAll(lineaList);
